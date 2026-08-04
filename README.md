@@ -1,32 +1,113 @@
-# UFC Fight Outcome Prediction
+<div align="center">
+  <h1>UFC Fight Outcome Prediction</h1>
+  <p>Predicting UFC winners from leak-free historical stats — and honestly measuring whether the model knows anything the betting market doesn't.</p>
+</div>
 
-Predicts UFC fight winners from pre-fight fighter stats, evaluated against the
-betting market. Phase 1 demo: logistic regression on feature differentials with
-a strict temporal split (train ≤ 2023-06, test after — never random-split).
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#results">Results</a></li>
+    <li><a href="#built-with">Built With</a></li>
+    <li><a href="#getting-started">Getting Started</a></li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#tasks">Tasks</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ol>
+</details>
 
-## Run
+---
+
+## About The Project
+
+An interview-defensible ML project: train models on ~8,300 UFC fights (2003–2026)
+and evaluate them the only way that matters for sports prediction — against the
+closing betting line. The deliverable is a **calibration report**
+([report.md](report.md)), not picks.
+
+What makes it defensible:
+
+- **Leak-free features.** `build_features.py` replays UFC history in date order,
+  maintaining per-fighter career state (records, per-minute striking/grappling
+  rates, Elo ratings, layoffs). Every feature is computed strictly from fights
+  *before* the one being predicted — nothing is trusted from pre-aggregated
+  datasets.
+- **Strict temporal validation.** Train on fights through 2023-06-03, test on
+  the 1,625 fights after. Hyperparameters tuned with 4-fold expanding-window CV
+  inside the train period; isotonic calibration and the market blend are fitted
+  on out-of-fold predictions only. Fight data is never randomly split.
+- **The market is the benchmark.** Closing odds are converted to vig-free
+  implied probabilities and scored with the same metrics as the model.
+
+## Results
+
+Test set = 1,200 post-June-2023 fights with closing odds:
+
+| Predictor | Accuracy | Log loss | Brier | ECE |
+|---|---|---|---|---|
+| Market (no-vig closing odds) | 0.702 | 0.582 | 0.198 | 0.030 |
+| LightGBM (45 leak-free features) | 0.639 | 0.639 | 0.224 | 0.033 |
+| **Blend: market + model** | **0.705** | **0.577** | **0.197** | **0.027** |
+
+**The model does not beat the closing line** — no public-data model should be
+expected to: closing odds aggregate information (injuries, camp reports, weight
+cuts, sharp money) that historical stats cannot see. That is why beating the
+closing line, not raw accuracy, is the real benchmark, and why a model claiming
+to beat it from public data is usually leaking.
+
+The more interesting finding: **blending the model with the market beats the
+market alone** (log loss 0.577 vs 0.582; better in 97.4% of 10,000 paired
+bootstrap resamples, 95% CI on the difference [−0.0001, +0.0089] — suggestive
+but just short of conclusive). The model's probabilities are also nearly as
+well-calibrated as the market's (ECE 0.033 vs 0.030). Full analysis, reliability
+diagram, and feature-importance writeup: **[report.md](report.md)**.
+
+## Built With
+
+[![Python][python-shield]][python-url]
+
+pandas · scikit-learn · LightGBM · matplotlib. Data: raw ufcstats.com scrapes
+([Greco1899/scrape_ufc_stats](https://github.com/Greco1899/scrape_ufc_stats))
+plus closing odds from the
+[Ultimate UFC Dataset](https://github.com/shortlikeafox/ultimate_ufc_dataset).
+
+## Getting Started
+
+### Prerequisites
+
+Python 3.10+.
+
+### Installation
 
 ```
 pip install -r requirements.txt
-python demo.py
 ```
 
-First run downloads the [Ultimate UFC Dataset](https://github.com/shortlikeafox/ultimate_ufc_dataset)
-(~7,200 fights with closing odds) to `data/` and caches it; later runs are offline.
+## Usage
 
-## Current results (test = last 20% of fights, 2023–2026)
+```
+python demo.py            # Phase 1 demo: logistic baseline on pre-built data
+python build_features.py  # replay fight history -> data/features.csv (leak-free)
+python train_report.py    # tune, train, evaluate -> report.md + plots/
+```
 
-| Predictor | Accuracy | Log loss |
-|---|---|---|
-| Logistic regression (7 features) | 0.626 | 0.636 |
-| Better career record baseline | 0.614 | — |
-| Market favorite (vig-removed) | **0.699** | **0.581** |
+All downloads are cached under `data/` on first run; later runs are offline.
+Seeds are fixed (42) — reruns reproduce the reported numbers.
 
-The market is the benchmark to beat, and so far it wins — as expected with
-public data. Phase 2 (leak-free rolling career features, gradient boosting,
-calibration report) tests whether any gap can be closed, reported honestly
-either way.
+## Tasks
 
-**Known caveat:** the demo trusts the dataset's own pre-fight aggregates.
-Phase 2 recomputes all features from raw fight history as of each fight date
-to rule out construction leakage.
+- [x] Phase 1: demo slice (logistic regression, temporal split, market baseline)
+- [x] Phase 2: leak-free features, Elo, LightGBM, expanding-window CV, calibration report
+- [ ] Picks mode: `predict.py` for upcoming cards (win probabilities only — no bet sizing, by design)
+- [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
+- [ ] Auto-refresh data for new events
+
+## Contact
+
+Advait Sadineni — sadineni.advait@gmail.com
+
+---
+
+<!-- Reference-style links -->
+[python-shield]: https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white
+[python-url]: https://python.org
