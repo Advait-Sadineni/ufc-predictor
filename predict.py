@@ -138,6 +138,8 @@ def main():
 
     print(f"Training on {len(df)} completed fights through {df['date'].max().date()}...")
     predict = train_stack(df, feats)
+    from props import fit_props
+    pred6, predtd = fit_props(df, feats)
 
     date = event.get("date", "")[:10]
     print(f"\n{event.get('name')}  —  {date}")
@@ -161,13 +163,20 @@ def main():
     for f in SNAP_FEATS:
         X[f"{f}_mean"] = (X[f"{f}_a"] + X[f"{f}_b"]) / 2
     probs = predict(X[feats])
+    P6 = pred6(X[feats])
+    exp_td = predtd(X[feats])
 
-    for (n1, n2, abbrev, _, nf1, nf2), p in zip(brows, probs):
+    for (n1, n2, abbrev, _, nf1, nf2), p, p6, td in zip(brows, probs, P6, exp_td):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
-        flags = "".join(f"  [{n} has {k} prior UFC fights]"
+        # method split for the picked side, renormalized to its win probability
+        side = p6[:3] if p >= 0.5 else p6[3:]
+        ko, sub, dec = pp * side / side.sum()
+        dist = p6[2] + p6[5]
+        flags = "".join(f"  [{n}: {k} prior UFC fights]"
                         for n, k in ((n1, nf1), (n2, nf2)) if k < 3)
-        print(f"{n1:24} vs {n2:24} {abbrev:14}"
-              f" -> {pick} {pp:.0%}{flags}")
+        print(f"{n1:24} vs {n2:24} {abbrev}")
+        print(f"    -> {pick} {pp:.0%}  (KO {ko:.0%} | Sub {sub:.0%} | Dec {dec:.0%})"
+              f"   distance {dist:.0%}   exp. takedowns {td:.1f}{flags}")
     print("=" * 74)
     print("Model probabilities are calibrated to ~±3% (see report.md) but do NOT")
     print("beat closing odds. This is not betting advice.")

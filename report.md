@@ -49,6 +49,23 @@ knowledge) that no historical-stats model can see. Matching the market's
 calibration while using only public stats is the honest achievement; claiming
 to beat closing lines would be the red flag.
 
+## Prop models — method, distance, takedowns (test set)
+
+Six-way outcome (winner × KO/sub/decision), evaluated against always predicting
+the training-set class frequencies:
+
+| Target | Model | Baseline |
+|---|---|---|
+| 6-way outcome log loss | 1.600 | 1.714 |
+| 6-way outcome top-1 accuracy | 0.350 | 0.242 |
+| Goes the distance — Brier | 0.234 | — |
+| Goes the distance — accuracy | 0.609 | 0.501 (majority class) |
+| Total takedowns — MAE | 1.69 | 1.81 (train mean) |
+
+Method-of-victory and distance predictions beat the frequency baselines but,
+as with the winner model, should be assumed weaker than prop-market prices —
+and prop markets carry roughly twice the vig of moneylines.
+
 ## Calibration
 
 ![Reliability diagram](plots/reliability.png)

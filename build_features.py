@@ -189,6 +189,17 @@ def _vs_split(hist, key, min_n=2):
     return np.mean(sub) if len(sub) >= min_n else np.nan
 
 
+def method_class(m):
+    m = str(m)
+    if "KO" in m or "TKO" in m:
+        return "ko"
+    if "Submission" in m:
+        return "sub"
+    if "Decision" in m:
+        return "dec"
+    return None  # DQ, overturned, etc.
+
+
 def snapshot(s, date, ph, cur_weight, today_opp, div):
     """Pre-fight feature vector for one fighter. Rates are NaN before debut.
 
@@ -346,6 +357,16 @@ def replay(res, stats, phys, market, rng):
         div = div_stats.setdefault(weight if pd.notna(weight) else 0,
                                    [0.0, 0, 0.0, 0])
 
+        # post-fight facts, used ONLY as labels and state updates — never features
+        g = stats.get((r.EVENT, bout))
+        st1 = g.loc[k1].to_dict() if g is not None and k1 in g.index else None
+        st2 = g.loc[k2].to_dict() if g is not None and k2 in g.index else None
+        if st1 is not None and isinstance(st1.get("sig_l"), pd.Series):
+            st1 = None  # duplicate-name collision inside one bout; skip stats
+        if st2 is not None and isinstance(st2.get("sig_l"), pd.Series):
+            st2 = None
+        secs = fight_seconds(r.ROUND, r.TIME)
+
         # ---- pre-fight snapshot (this is all the model may see) ----
         if outcome != "D/D":
             a_first = bool(rng.integers(2))  # seeded random orientation
@@ -359,6 +380,10 @@ def replay(res, stats, phys, market, rng):
             row = {
                 "date": r.date, "event": r.EVENT, "fighter_a": fa, "fighter_b": fb,
                 "a_wins": int((outcome == "W/L") == a_first),
+                "method_cls": method_class(r.METHOD),
+                "finish_round": pd.to_numeric(r.ROUND, errors="coerce"),
+                "total_td": (st1["td_l"] + st2["td_l"]
+                             if st1 is not None and st2 is not None else np.nan),
                 "red_corner": 1 if a_first else -1,
                 "southpaw_vs_orthodox": int(stance_a == "Southpaw" and stance_b == "Orthodox")
                                       - int(stance_a == "Orthodox" and stance_b == "Southpaw"),
@@ -390,14 +415,6 @@ def replay(res, stats, phys, market, rng):
             rows.append(row)
 
         # ---- fold results into state ----
-        g = stats.get((r.EVENT, bout))
-        st1 = g.loc[k1].to_dict() if g is not None and k1 in g.index else None
-        st2 = g.loc[k2].to_dict() if g is not None and k2 in g.index else None
-        if st1 is not None and isinstance(st1.get("sig_l"), pd.Series):
-            st1 = None  # duplicate-name collision inside one bout; skip stats
-        if st2 is not None and isinstance(st2.get("sig_l"), pd.Series):
-            st2 = None
-        secs = fight_seconds(r.ROUND, r.TIME)
         res1 = 1 if outcome == "W/L" else (0 if outcome == "L/W" else 0.5)
         # Elo before records mutate; finishes move ratings harder
         elo1_pre, elo2_pre = s1["elo"], s2["elo"]
