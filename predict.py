@@ -61,6 +61,9 @@ def fetch_fanduel(refresh):
     """
     import os
     key = os.environ.get("ODDS_API_KEY")
+    key_file = Path(__file__).parent / ".odds_api_key"
+    if not key and key_file.exists():
+        key = key_file.read_text().strip()
     if not key:
         return None
     cache = DATA / "fanduel_odds.json"
