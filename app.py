@@ -323,37 +323,40 @@ with tab_parlay:
                     f"Lower the target or raise the stake.")
             render_ticket(f"Goal ticket — ${stake:.0f} chasing ${target:.0f} profit",
                           chosen, stake, note)
-        else:
-            s1, s2 = st.columns(2)
-            main_stake = s1.number_input("Main ticket stake ($)", 25.0, 500.0, 75.0, 25.0)
-            side_stake = s2.number_input("Side ticket stake ($)", 5.0, 100.0, 25.0, 5.0)
-            # Main ticket: 2-3 chunkiest convictions, methods preferred.
-            mc = build_cands(dict(m_share=0.50, m_min=0.40, dc_share=0.80, shape=0.64))
-            mc.sort(key=lambda t: t[0], reverse=True)
-            main, p = [], 1.0
-            for c_leg in mc:
-                if len(main) >= 3 or (len(main) >= 2 and p * c_leg[0] < 0.25):
-                    break
-                main.append(c_leg)
-                p *= c_leg[0]
-            render_ticket("Main ticket — the convictions, with their methods",
-                          main, main_stake, None)
+        if target > 0:
             st.divider()
-            # Side ticket: breadth — 5-6 likely legs for the big multiplier.
-            sc_ = build_cands(dict(m_share=0.48, m_min=0.36, dc_share=0.76, shape=0.57))
-            sc_.sort(key=lambda t: t[0], reverse=True)
-            side, p = [], 1.0
-            for c_leg in sc_:
-                if len(side) >= 6:
-                    break
-                if p * c_leg[0] >= 0.08 or len(side) < 3:
-                    side.append(c_leg)
-                    p *= c_leg[0]
-            render_ticket("Side ticket — the breadth play", side, side_stake,
-                          "The two tickets share their strongest legs on purpose — if "
-                          "the favorites all land, both cash. Price each on FanDuel "
-                          "against its estimate; if a quote is below it, pass on that "
-                          "ticket.")
+        # The standing two-ticket plan always renders; the goal ticket
+        # (when a target is set) appears above it as an extra view.
+        s1, s2 = st.columns(2)
+        main_stake = s1.number_input("Main ticket stake ($)", 25.0, 500.0, 75.0, 25.0)
+        side_stake = s2.number_input("Side ticket stake ($)", 5.0, 100.0, 25.0, 5.0)
+        # Main ticket: 2-3 chunkiest convictions, methods preferred.
+        mc = build_cands(dict(m_share=0.50, m_min=0.40, dc_share=0.80, shape=0.64))
+        mc.sort(key=lambda t: t[0], reverse=True)
+        main, p = [], 1.0
+        for c_leg in mc:
+            if len(main) >= 3 or (len(main) >= 2 and p * c_leg[0] < 0.25):
+                break
+            main.append(c_leg)
+            p *= c_leg[0]
+        render_ticket("Main ticket — the convictions, with their methods",
+                      main, main_stake, None)
+        st.divider()
+        # Side ticket: breadth — 5-6 likely legs for the big multiplier.
+        sc_ = build_cands(dict(m_share=0.48, m_min=0.36, dc_share=0.76, shape=0.57))
+        sc_.sort(key=lambda t: t[0], reverse=True)
+        side, p = [], 1.0
+        for c_leg in sc_:
+            if len(side) >= 6:
+                break
+            if p * c_leg[0] >= 0.08 or len(side) < 3:
+                side.append(c_leg)
+                p *= c_leg[0]
+        render_ticket("Side ticket — the breadth play", side, side_stake,
+                      "The two tickets share their strongest legs on purpose — if "
+                      "the favorites all land, both cash. Price each on FanDuel "
+                      "against its estimate; if a quote is below it, pass on that "
+                      "ticket.")
         st.divider()
 
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
