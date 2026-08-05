@@ -4,3 +4,4 @@ bets.csv
 .odds_api_key
 .git-credentials-ufc
 espn_probe.json
+ufc-clone/
