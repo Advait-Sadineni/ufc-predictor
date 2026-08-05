@@ -179,7 +179,16 @@ with tab_parlay:
               "B": dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60),
               "A": dict(m_share=0.48, m_min=0.38, dc_share=0.78, shape=0.58),
               "L": dict(m_share=0.42, m_min=0.33, dc_share=0.75, shape=0.56)}[profile[0]]
-        PROP_HAIRCUT = 0.85  # assume FanDuel pays ~15% under fair on unpriced legs
+        target = st.number_input(
+            "🎯 Goal mode — profit target ($). Set 0 to use the risk dial instead.",
+            0.0, 100000.0, 0.0, 25.0,
+            help="Tell it what you want to win from your stake and it builds the "
+                 "cheapest-probability ticket that gets there. The target sets "
+                 "the risk — that's the honest math of parlays.")
+        # Books price props flatter than our model (observed 2026-08-08 card:
+        # our 76%/71% distance calls priced as ~65%/64%). Estimate their price
+        # by shrinking our probability toward 50%, minus a small vig cut.
+        est_prop_dec = lambda p: 0.95 / (0.5 + (p - 0.5) * 0.55)
 
         # Every leg option for every fight; score = p x payout multiple, i.e. the
         # leg's multiplicative EV contribution (1.0 = neutral, >1 = accretive).
@@ -215,13 +224,13 @@ with tab_parlay:
                 elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
                     p_leg = meth[0][1]
                     leg = (p_leg, f"{side} by {meth[0][0]}", "method",
-                           (1 / p_leg) * PROP_HAIRCUT,
+                           est_prop_dec(p_leg),
                            f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                            f"{m1_share:.0%} of his win paths end this way — edge: {why}")
                 elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
                     p_leg = meth[0][1] + meth[1][1]
                     leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
-                           (1 / p_leg) * PROP_HAIRCUT,
+                           est_prop_dec(p_leg),
                            f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                            f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}")
                 elif pd.notna(ml_dec):
@@ -231,22 +240,36 @@ with tab_parlay:
                 p_leg = max(p_dist, 1 - p_dist)
                 lbl = ("Goes the distance: " if p_dist >= 0.5 else
                        "Doesn't go the distance: ") + fight
-                leg = (p_leg, lbl, "fight-level", (1 / p_leg) * PROP_HAIRCUT,
+                leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                        f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                        "winner too close to call — betting the fight's shape, not a side")
             if leg:
                 cands.append(leg)
-        # Safe/Balanced fill by confidence (most likely legs first); Aggressive
-        # and Longshot fill by payout multiplier (fewer, spicier legs).
-        cands.sort(key=lambda t: t[0] if profile[0] in "SB" else t[3], reverse=True)
         chosen, p_hit = [], 1.0
-        for c_leg in cands:
-            if len(chosen) >= 6:
-                break
-            if p_hit * c_leg[0] >= floor or len(chosen) < 2:
+        if target > 0:
+            # Goal mode: reach the required multiplier with the LEAST probability
+            # cost — legs ranked by log(p)/log(dec), the prob-price of payout.
+            required = (stake + target) / stake
+            cands.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
+            est_prod = 1.0
+            for c_leg in cands:
+                if est_prod >= required or len(chosen) >= 6:
+                    break
                 chosen.append(c_leg)
                 p_hit *= c_leg[0]
-        if len(chosen) < 2:
+                est_prod *= c_leg[3]
+            goal_reached = est_prod >= required
+        else:
+            # Safe/Balanced fill by confidence (most likely legs first);
+            # Aggressive and Longshot fill by payout multiplier.
+            cands.sort(key=lambda t: t[0] if profile[0] in "SB" else t[3], reverse=True)
+            for c_leg in cands:
+                if len(chosen) >= 6:
+                    break
+                if p_hit * c_leg[0] >= floor or len(chosen) < 2:
+                    chosen.append(c_leg)
+                    p_hit *= c_leg[0]
+        if len(chosen) < 1 or (target <= 0 and len(chosen) < 2):
             st.info("Not enough eligible legs on this card.")
         else:
             est_dec = float(np.prod([c[3] for c in chosen]))
@@ -258,9 +281,27 @@ with tab_parlay:
             a, b, c = st.columns(3)
             a.metric("Model P(all hit)", f"{p_hit:.1%}")
             b.metric("Est. payout", f"{dec_to_american(est_dec):+.0f}",
-                     help="Moneyline legs at FanDuel's real price; unpriced legs "
-                          "assume FanDuel pays 15% under fair. Their quote decides.")
+                     help="Moneyline legs at FanDuel's real price; other legs use a "
+                          "market-anchored estimate (model prob shrunk toward 50%, "
+                          "small vig cut) calibrated to observed FanDuel prop "
+                          "prices. Their quote decides.")
             c.metric(f"Est. ${stake:.0f} returns", f"${stake * est_dec:,.2f}")
+            if target > 0:
+                if goal_reached:
+                    st.info(f"**The price of your goal:** turning \\${stake:.0f} into "
+                            f"\\${stake + target:.0f} needs about "
+                            f"{dec_to_american((stake + target) / stake):+.0f} — the "
+                            f"model's cheapest route there hits **{p_hit:.0%}** of the "
+                            f"time. The target sets the risk; if that chance feels bad, "
+                            f"the honest levers are a smaller target or a bigger stake — "
+                            f"never worse legs.")
+                else:
+                    st.warning(f"This card can't honestly reach \\${target:.0f} profit on "
+                               f"\\${stake:.0f} — the six best legs top out near "
+                               f"{dec_to_american(est_dec):+.0f} "
+                               f"(\\${stake * est_dec - stake:,.0f} profit) with a "
+                               f"{p_hit:.0%} chance. Chasing further means junk legs; "
+                               f"lower the target or raise the stake.")
             st.caption("Built to maximize payout at your chosen risk level, not to "
                        "minimize risk: legs are ranked by EV score (probability x "
                        "payout multiple — above 1.00 means the price beats the "
