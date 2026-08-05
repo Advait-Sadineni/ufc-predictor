@@ -137,6 +137,31 @@ def main():
         print(f"  LIVE HEDGE: if every leg except {last['side']} has hit, "
               f"${h:.2f} on {last['other']} at {last['odds_other']:+.0f} locks ${locked:+.2f}.")
 
+    # ---- method-of-victory parlay (model-priced; no live prop odds via API) ----
+    def fair_american(p):
+        return -p / (1 - p) * 100 if p >= 0.5 else (1 - p) / p * 100
+
+    methods = []
+    for _, r in df.iterrows():
+        for side, tag, p in [(r["fighter_a"], "by KO/TKO", r["p_a_ko"]),
+                             (r["fighter_a"], "by Sub", r["p_a_sub"]),
+                             (r["fighter_a"], "by Dec", r["p_a_dec"]),
+                             (r["fighter_b"], "by KO/TKO", r["p_b_ko"]),
+                             (r["fighter_b"], "by Sub", r["p_b_sub"]),
+                             (r["fighter_b"], "by Dec", r["p_b_dec"])]:
+            methods.append((p, f"{side} {tag}"))
+    methods.sort(reverse=True)
+    top = [m for m in methods if m[0] >= 0.35][:3] or methods[:2]
+    p_combo = float(np.prod([p for p, _ in top]))
+    print("\n" + "#" * 74)
+    print(f"\nMETHOD PARLAY — model-priced (FanDuel prop odds not in the API):")
+    for p, leg in top:
+        print(f"  {leg:38} model {p:.0%}   fair odds {fair_american(p):+.0f}")
+    print(f"  P(all hit): model {p_combo:.1%}   fair combined {fair_american(p_combo):+.0f}")
+    print(f"  Only worth a ticket if FanDuel pays MORE than {fair_american(p_combo * 0.8):+.0f}")
+    print("  (fair + a 25% cushion for the model knowing less than the market).")
+    print("  Method models are weaker than the winner model — see report.md.")
+
     print("\nReality check: the market-EV lines above are what these tickets cost in")
     print("expectation. Parlays compound the vig on every leg — they are the most")
     print("expensive way to bet the same opinions. Entertainment pricing, not edge.")
