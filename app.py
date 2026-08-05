@@ -165,150 +165,141 @@ with tab_parlay:
     legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
     legs.sort(key=lambda l: l["p"], reverse=True)
 
-    if st.toggle("🎯 The Play — the model's ticket for this card", value=True):
-        with st.expander("Adjust risk (default: Balanced)"):
-            profile = st.select_slider(
-                "Target chance the whole ticket hits",
-                ["Safe (~35%)", "Balanced (~25%)", "Aggressive (~15%)", "Longshot (~5%)"],
-                value="Balanced (~25%)")
-        floor = {"S": 0.35, "B": 0.25, "A": 0.15, "L": 0.05}[profile[0]]
-        # The dial also controls how spicy each leg's TYPE gets: Safe takes the
-        # conservative variant of a fight; Aggressive/Longshot upgrade the same
-        # fight to its method play (lower probability, much bigger multiplier).
-        TH = {"S": dict(m_share=0.62, m_min=0.45, dc_share=0.88, shape=0.62),
-              "B": dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60),
-              "A": dict(m_share=0.48, m_min=0.38, dc_share=0.78, shape=0.58),
-              "L": dict(m_share=0.42, m_min=0.33, dc_share=0.75, shape=0.56)}[profile[0]]
+    if st.toggle("🎯 The Play — the model's fight-night plan", value=True):
         target = st.number_input(
-            "🎯 Goal mode — profit target ($). Set 0 to use the risk dial instead.",
+            "Goal mode — profit target ($). 0 = the standard two-ticket plan.",
             0.0, 100000.0, 0.0, 25.0,
-            help="Tell it what you want to win from your stake and it builds the "
-                 "cheapest-probability ticket that gets there. The target sets "
-                 "the risk — that's the honest math of parlays.")
+            help="Set a target and it builds the cheapest-probability single "
+                 "ticket that reaches it. Leave 0 for the main + side plan.")
         # Books price props flatter than our model (observed 2026-08-08 card:
         # our 76%/71% distance calls priced as ~65%/64%). Estimate their price
         # by shrinking our probability toward 50%, minus a small vig cut.
         est_prop_dec = lambda p: 0.95 / (0.5 + (p - 0.5) * 0.55)
 
-        # Every leg option for every fight; score = p x payout multiple, i.e. the
-        # leg's multiplicative EV contribution (1.0 = neutral, >1 = accretive).
-        cands = []
-        for _, r in df.iterrows():
-            pick_a = r["p_a"] >= 0.5
-            p_win = r["p_a"] if pick_a else 1 - r["p_a"]
-            side = r["fighter_a"] if pick_a else r["fighter_b"]
-            fight = f"{r['fighter_a']} vs {r['fighter_b']}"
-            pre = "a" if pick_a else "b"
-            raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
-                   "Dec": r[f"p_{pre}_dec"]}
-            sc = p_win / sum(raw.values())
-            meth = sorted(((k, v * sc) for k, v in raw.items()),
-                          key=lambda kv: kv[1], reverse=True)
-            p_dist = r["p_a_dec"] + r["p_b_dec"]
-            o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
-            # Per-fight type decision, driven by confidence structure:
-            #   confident winner + clear method   -> method leg (payout boost)
-            #   confident winner + two live paths -> double chance
-            #   confident winner + murky method   -> moneyline
-            #   unsure winner + clear fight shape -> distance leg (no side taken)
-            # A moneyline whose real FanDuel price is clearly generous (+EV >=1.05)
-            # overrides the method upgrade — verifiable value beats structure.
-            leg = None
-            ml_dec = american_to_dec(o) if pd.notna(o) else np.nan
-            why = str(r.get("why", "")) if "why" in df.columns else ""
-            if p_win >= 0.62:
-                m1_share = meth[0][1] / p_win
-                if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
-                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                           f"FanDuel's price is generous vs the model — edge: {why}")
-                elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
-                    p_leg = meth[0][1]
-                    leg = (p_leg, f"{side} by {meth[0][0]}", "method",
-                           est_prop_dec(p_leg),
+        def build_cands(TH):
+            """One candidate leg per fight, type chosen by confidence structure."""
+            out = []
+            for _, r in df.iterrows():
+                pick_a = r["p_a"] >= 0.5
+                p_win = r["p_a"] if pick_a else 1 - r["p_a"]
+                side = r["fighter_a"] if pick_a else r["fighter_b"]
+                fight = f"{r['fighter_a']} vs {r['fighter_b']}"
+                pre = "a" if pick_a else "b"
+                raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
+                       "Dec": r[f"p_{pre}_dec"]}
+                sc = p_win / sum(raw.values())
+                meth = sorted(((k, v * sc) for k, v in raw.items()),
+                              key=lambda kv: kv[1], reverse=True)
+                p_dist = r["p_a_dec"] + r["p_b_dec"]
+                o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
+                ml_dec = american_to_dec(o) if pd.notna(o) else np.nan
+                why = str(r.get("why", "")) if "why" in df.columns else ""
+                leg = None
+                if p_win >= 0.62:
+                    m1_share = meth[0][1] / p_win
+                    if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
+                        leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
+                               f"FanDuel's price is generous vs the model — edge: {why}")
+                    elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
+                        p_leg = meth[0][1]
+                        leg = (p_leg, f"{side} by {meth[0][0]}", "method",
+                               est_prop_dec(p_leg),
+                               f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                               f"{m1_share:.0%} of his win paths end this way — edge: {why}")
+                    elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
+                        p_leg = meth[0][1] + meth[1][1]
+                        leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
+                               est_prop_dec(p_leg),
+                               f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                               f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}")
+                    elif pd.notna(ml_dec):
+                        leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
+                               f"clear pick, no dominant method — edge: {why}")
+                elif max(p_dist, 1 - p_dist) >= TH["shape"]:
+                    p_leg = max(p_dist, 1 - p_dist)
+                    lbl = ("Goes the distance: " if p_dist >= 0.5 else
+                           "Doesn't go the distance: ") + fight
+                    leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                            f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                           f"{m1_share:.0%} of his win paths end this way — edge: {why}")
-                elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
-                    p_leg = meth[0][1] + meth[1][1]
-                    leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
-                           est_prop_dec(p_leg),
-                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                           f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}")
-                elif pd.notna(ml_dec):
-                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                           f"clear pick, no dominant method — edge: {why}")
-            elif max(p_dist, 1 - p_dist) >= TH["shape"]:
-                p_leg = max(p_dist, 1 - p_dist)
-                lbl = ("Goes the distance: " if p_dist >= 0.5 else
-                       "Doesn't go the distance: ") + fight
-                leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
-                       f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                       "winner too close to call — betting the fight's shape, not a side")
-            if leg:
-                cands.append(leg)
-        chosen, p_hit = [], 1.0
+                           "winner too close to call — betting the fight's shape, not a side")
+                if leg:
+                    out.append(leg)
+            return out
+
+        def render_ticket(title, chosen, stake_t, note):
+            if not chosen:
+                st.info(f"{title}: not enough eligible legs on this card.")
+                return
+            p_hit = float(np.prod([c[0] for c in chosen]))
+            est_dec = float(np.prod([c[3] for c in chosen]))
+            st.markdown(f"**{title}**")
+            st.dataframe(pd.DataFrame(
+                [{"Leg": c[1], "Type": c[2], "Model": c[0],
+                  "Price": c[4], "Why this leg": c[5]} for c in chosen]),
+                column_config={"Model": st.column_config.NumberColumn(format="percent")},
+                hide_index=True, width="stretch")
+            a, b, c = st.columns(3)
+            a.metric("Model P(hit)", f"{p_hit:.1%}")
+            b.metric("Est. payout", f"{dec_to_american(est_dec):+.0f}",
+                     help="Moneyline legs at FanDuel's real price; other legs use "
+                          "a market-anchored estimate. Their quote decides.")
+            c.metric(f"Est. ${stake_t:.0f} returns", f"${stake_t * est_dec:,.2f}")
+            if note:
+                st.caption(note)
+
         if target > 0:
-            # Goal mode: reach the required multiplier with the LEAST probability
-            # cost — legs ranked by log(p)/log(dec), the prob-price of payout.
+            TH_G = dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60)
+            gc = build_cands(TH_G)
             required = (stake + target) / stake
-            cands.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
-            est_prod = 1.0
-            for c_leg in cands:
+            gc.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
+            chosen, est_prod, p_hit = [], 1.0, 1.0
+            for c_leg in gc:
                 if est_prod >= required or len(chosen) >= 6:
                     break
                 chosen.append(c_leg)
                 p_hit *= c_leg[0]
                 est_prod *= c_leg[3]
-            goal_reached = est_prod >= required
+            note = (f"Turning ${stake:.0f} into ${stake + target:.0f} needs about "
+                    f"{dec_to_american(required):+.0f}; the cheapest route hits "
+                    f"{p_hit:.0%} of the time. The target sets the risk — the honest "
+                    f"levers are a smaller target or bigger stake, never worse legs."
+                    if est_prod >= required else
+                    f"This card can't honestly reach ${target:.0f} on ${stake:.0f} — "
+                    f"the best six legs top out near {dec_to_american(est_prod):+.0f}. "
+                    f"Lower the target or raise the stake.")
+            render_ticket(f"Goal ticket — ${stake:.0f} chasing ${target:.0f} profit",
+                          chosen, stake, note)
         else:
-            # Safe/Balanced fill by confidence (most likely legs first);
-            # Aggressive and Longshot fill by payout multiplier.
-            cands.sort(key=lambda t: t[0] if profile[0] in "SB" else t[3], reverse=True)
-            for c_leg in cands:
-                if len(chosen) >= 6:
+            s1, s2 = st.columns(2)
+            main_stake = s1.number_input("Main ticket stake ($)", 25.0, 500.0, 75.0, 25.0)
+            side_stake = s2.number_input("Side ticket stake ($)", 5.0, 100.0, 25.0, 5.0)
+            # Main ticket: 2-3 chunkiest convictions, methods preferred.
+            mc = build_cands(dict(m_share=0.50, m_min=0.40, dc_share=0.80, shape=0.64))
+            mc.sort(key=lambda t: t[0], reverse=True)
+            main, p = [], 1.0
+            for c_leg in mc:
+                if len(main) >= 3 or (len(main) >= 2 and p * c_leg[0] < 0.25):
                     break
-                if p_hit * c_leg[0] >= floor or len(chosen) < 2:
-                    chosen.append(c_leg)
-                    p_hit *= c_leg[0]
-        if len(chosen) < 1 or (target <= 0 and len(chosen) < 2):
-            st.info("Not enough eligible legs on this card.")
-        else:
-            est_dec = float(np.prod([c[3] for c in chosen]))
-            rows_s = [{"Leg": c[1], "Type": c[2], "Model": c[0],
-                       "Price": c[4], "Why this leg": c[5]} for c in chosen]
-            st.dataframe(pd.DataFrame(rows_s),
-                         column_config={"Model": st.column_config.NumberColumn(format="percent")},
-                         hide_index=True, width="stretch")
-            a, b, c = st.columns(3)
-            a.metric("Model P(all hit)", f"{p_hit:.1%}")
-            b.metric("Est. payout", f"{dec_to_american(est_dec):+.0f}",
-                     help="Moneyline legs at FanDuel's real price; other legs use a "
-                          "market-anchored estimate (model prob shrunk toward 50%, "
-                          "small vig cut) calibrated to observed FanDuel prop "
-                          "prices. Their quote decides.")
-            c.metric(f"Est. ${stake:.0f} returns", f"${stake * est_dec:,.2f}")
-            if target > 0:
-                if goal_reached:
-                    st.info(f"**The price of your goal:** turning \\${stake:.0f} into "
-                            f"\\${stake + target:.0f} needs about "
-                            f"{dec_to_american((stake + target) / stake):+.0f} — the "
-                            f"model's cheapest route there hits **{p_hit:.0%}** of the "
-                            f"time. The target sets the risk; if that chance feels bad, "
-                            f"the honest levers are a smaller target or a bigger stake — "
-                            f"never worse legs.")
-                else:
-                    st.warning(f"This card can't honestly reach \\${target:.0f} profit on "
-                               f"\\${stake:.0f} — the six best legs top out near "
-                               f"{dec_to_american(est_dec):+.0f} "
-                               f"(\\${stake * est_dec - stake:,.0f} profit) with a "
-                               f"{p_hit:.0%} chance. Chasing further means junk legs; "
-                               f"lower the target or raise the stake.")
-            st.caption("Built to maximize payout at your chosen risk level, not to "
-                       "minimize risk: legs are ranked by EV score (probability x "
-                       "payout multiple — above 1.00 means the price beats the "
-                       "model's probability) and added until the ticket reaches the "
-                       "target hit chance. Fewer, chunkier legs beat many small ones "
-                       "at the same risk — every extra leg compounds FanDuel's vig. "
-                       "If their quoted payout is below the estimate, pass.")
+                main.append(c_leg)
+                p *= c_leg[0]
+            render_ticket("Main ticket — the convictions, with their methods",
+                          main, main_stake, None)
+            st.divider()
+            # Side ticket: breadth — 5-6 likely legs for the big multiplier.
+            sc_ = build_cands(dict(m_share=0.48, m_min=0.36, dc_share=0.76, shape=0.57))
+            sc_.sort(key=lambda t: t[0], reverse=True)
+            side, p = [], 1.0
+            for c_leg in sc_:
+                if len(side) >= 6:
+                    break
+                if p * c_leg[0] >= 0.08 or len(side) < 3:
+                    side.append(c_leg)
+                    p *= c_leg[0]
+            render_ticket("Side ticket — the breadth play", side, side_stake,
+                          "The two tickets share their strongest legs on purpose — if "
+                          "the favorites all land, both cash. Price each on FanDuel "
+                          "against its estimate; if a quote is below it, pass on that "
+                          "ticket.")
         st.divider()
 
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
