@@ -90,13 +90,15 @@ def main():
         o = r["fanduel_a"] if pick_a else r["fanduel_b"]
         o_other = r["fanduel_b"] if pick_a else r["fanduel_a"]
         pre = "a" if pick_a else "b"
+        raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
+               "Dec": r[f"p_{pre}_dec"]}
+        scale = p / sum(raw.values())  # calibrate method split to the winner ensemble
         pool.append({
             "side": side, "other": other, "odds": o, "odds_other": o_other,
             "p_model": p, "p_market": no_vig_side(o, o_other),
             "p_market_other": no_vig_side(o_other, o),
             "ev": p * american_to_dec(o) - 1, "main": i == main_idx,
-            "methods": {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
-                        "Dec": r[f"p_{pre}_dec"]},
+            "methods": {k: v * scale for k, v in raw.items()},
         })
     if not pool:
         sys.exit("No fights with FanDuel odds in the snapshot.")
