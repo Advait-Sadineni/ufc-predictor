@@ -142,8 +142,31 @@ def new_state():
     }
 
 
-def snapshot(s, date, ph, cur_weight):
-    """Pre-fight feature vector for one fighter. Rates are NaN before debut."""
+def _rate(num, secs):
+    return num / (secs / 900) if secs else np.nan
+
+
+def opp_traits(s, own_height, opp_height, opp_stance):
+    """Archetype of an opponent, judged from their PRE-fight career state."""
+    return {
+        "taller": pd.notna(opp_height) and pd.notna(own_height) and opp_height >= own_height + 2.5,
+        "wrestler": s["secs"] > 0 and _rate(s["td_l"], s["secs"]) >= 1.5,
+        "power": s["secs"] > 0 and _rate(s["kd"], s["secs"]) >= 0.4,
+        "southpaw": opp_stance == "Southpaw",
+    }
+
+
+def _vs_split(hist, key, min_n=2):
+    sub = [h["win"] for h in hist if h["opp"][key]]
+    return np.mean(sub) if len(sub) >= min_n else np.nan
+
+
+def snapshot(s, date, ph, cur_weight, today_opp, div):
+    """Pre-fight feature vector for one fighter. Rates are NaN before debut.
+
+    today_opp: archetype dict of TODAY's opponent (activates matchup splits).
+    div: running (sum, n) of height/reach for the division, pre-fight.
+    """
     mins = s["secs"] / 60
     p15 = s["secs"] / 900
     n = s["n"]
@@ -195,10 +218,24 @@ def snapshot(s, date, ph, cur_weight):
         "weight_change": (np.sign(cur_weight - s["last_weight"])
                           if pd.notna(cur_weight) and pd.notna(s["last_weight"]) else 0.0),
     }
+    # --- style-matchup splits: record vs opponent archetypes ---
+    splits = {k: _vs_split(hist, k) for k in ("taller", "wrestler", "power", "southpaw")}
+    out["vs_taller_win"] = splits["taller"]
+    out["vs_wrestler_win"] = splits["wrestler"]
+    out["vs_power_win"] = splits["power"]
+    out["vs_southpaw_win"] = splits["southpaw"]
+    # win rate vs the archetypes TODAY's opponent actually matches
+    active = [splits[k] for k, v in today_opp.items() if v and pd.notna(splits[k])]
+    out["matchup_win"] = np.mean(active) if active else np.nan
+    # --- cut-severity proxy: physical size relative to the division so far ---
+    h_sum, h_n, r_sum, r_n = div
+    out["size_vs_div_h"] = (ph.get("height", np.nan) - h_sum / h_n) if h_n >= 20 else np.nan
+    out["size_vs_div_r"] = (ph.get("reach", np.nan) - r_sum / r_n) if r_n >= 20 else np.nan
     return out
 
 
-def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cur_weight):
+def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cur_weight,
+                 opp_archetype):
     """Fold one completed fight into a fighter's career state."""
     if my is not None:
         s["sig_l"] += my["sig_l"]; s["sig_a"] += my["sig_a"]
@@ -240,6 +277,7 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
         "finished": int(result == 1 and finish),
         "was_finished": int(result == 0 and finish),
         "opp_elo": opp_elo_pre,
+        "opp": opp_archetype,
     })
 
 
@@ -250,6 +288,7 @@ def main():
 
     res = res[res["date"].notna()].sort_values(["date", "EVENT", "BOUT"]).reset_index(drop=True)
     states, rows = {}, []
+    div_stats = {}  # weight_lbs -> [height_sum, height_n, reach_sum, reach_n], pre-fight
     matched_odds = 0
 
     for r in res.itertuples():
@@ -270,14 +309,24 @@ def main():
         weight = next((v for k, v in WEIGHT_LBS.items()
                        if k in wc and not ("Light Heavyweight" in wc and k == "Heavyweight")), np.nan)
         sched5 = "5 Rnd" in str(r._8)
+        h1 = phys.get(k1, {}).get("height", np.nan)
+        h2 = phys.get(k2, {}).get("height", np.nan)
+        stance1 = phys.get(k1, {}).get("stance", "")
+        stance2 = phys.get(k2, {}).get("stance", "")
+        # archetype of each fighter's opponent, from PRE-fight state
+        traits_of_2 = opp_traits(s2, h1, h2, stance2)   # fighter1's opponent
+        traits_of_1 = opp_traits(s1, h2, h1, stance1)   # fighter2's opponent
+        div = div_stats.setdefault(weight if pd.notna(weight) else 0,
+                                   [0.0, 0, 0.0, 0])
 
         # ---- pre-fight snapshot (this is all the model may see) ----
         if outcome != "D/D":
             a_first = bool(rng.integers(2))  # seeded random orientation
             (ka, kb) = (k1, k2) if a_first else (k2, k1)
             (fa, fb) = (f1, f2) if a_first else (f2, f1)
-            sa = snapshot(states[ka], r.date, phys.get(ka, {}), weight)
-            sb = snapshot(states[kb], r.date, phys.get(kb, {}), weight)
+            (ta, tb) = (traits_of_2, traits_of_1) if a_first else (traits_of_1, traits_of_2)
+            sa = snapshot(states[ka], r.date, phys.get(ka, {}), weight, ta, div)
+            sb = snapshot(states[kb], r.date, phys.get(kb, {}), weight, tb, div)
             stance_a = phys.get(ka, {}).get("stance", "")
             stance_b = phys.get(kb, {}).get("stance", "")
             row = {
@@ -295,6 +344,11 @@ def main():
                 row[f"{feat}_diff"] = sa[feat] - sb[feat]
                 row[f"{feat}_a"] = sa[feat]
                 row[f"{feat}_b"] = sb[feat]
+            # explicit trait interactions (antisymmetric by construction)
+            row["chin_vs_power_diff"] = (sa["kd_taken_p15"] * sb["kd_p15"]
+                                         - sb["kd_taken_p15"] * sa["kd_p15"])
+            row["grapple_threat_diff"] = (sa["td_avg"] * (1 - sb["td_def"])
+                                          - sb["td_avg"] * (1 - sa["td_def"]))
             okey = (r.date, frozenset((ka, kb)))
             if okey in market:
                 odds_a, rank_a = market[okey].get(ka, (np.nan, np.nan))
@@ -326,11 +380,19 @@ def main():
         k_elo2 = (40 if s2["n"] < 5 else 24) * finish_mult
         s1_new_elo = elo1_pre + k_elo1 * (res1 - exp1)
         s2_new_elo = elo2_pre + k_elo2 * ((1 - res1) - (1 - exp1))
-        update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight)
-        update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight)
+        update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight,
+                     traits_of_2)
+        update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight,
+                     traits_of_1)
         s1["elo"], s2["elo"] = s1_new_elo, s2_new_elo
         s1["peak_elo"] = max(s1["peak_elo"], s1_new_elo)
         s2["peak_elo"] = max(s2["peak_elo"], s2_new_elo)
+        for h, rr in ((h1, phys.get(k1, {}).get("reach", np.nan)),
+                      (h2, phys.get(k2, {}).get("reach", np.nan))):
+            if pd.notna(h):
+                div[0] += h; div[1] += 1
+            if pd.notna(rr):
+                div[2] += rr; div[3] += 1
 
     df = pd.DataFrame(rows)
     out = DATA / "features.csv"

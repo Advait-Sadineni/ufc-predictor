@@ -101,6 +101,7 @@ Seeds are fixed (42) — reruns reproduce the reported numbers.
 - [x] Phase 1: demo slice (logistic regression, temporal split, market baseline)
 - [x] Phase 2: leak-free features, Elo, LightGBM, expanding-window CV, calibration report
 - [x] Phase 3: strike-location/position mixes, recent form, opponent quality, finish-weighted Elo, rankings, stacked LGB+XGB+logistic ensemble
+- [x] Phase 4 (negative result): style-matchup splits, trait interactions, and a cut-severity proxy were built, evaluated, and rejected — too sparse, no test-set improvement (see report.md § Negative results)
 - [ ] Picks mode: `predict.py` for upcoming cards (win probabilities only — no bet sizing, by design)
 - [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
 - [ ] Auto-refresh data for new events

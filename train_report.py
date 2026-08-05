@@ -396,6 +396,20 @@ through the full ensemble):
 
 {chr(10).join(f"- `{k}`: {v:+.4f}" for k, v in imp.head(10).items())}
 
+## Negative results (tried and rejected)
+
+Style-matchup features were built and evaluated but did not improve the model,
+so the final feature set excludes them (they remain in `data/features.csv`):
+per-archetype win-rate splits (vs taller / wrestler / power / southpaw
+opponents, and vs today's opponent's archetype), explicit trait interactions
+(chin-vs-power: KD-absorbed × opponent KD rate; grappling threat: TD rate ×
+opponent TD-defense gap), and a cut-severity proxy (height/reach vs the
+division's running average). The splits are sparse — most fighters have too few
+fights against a given archetype for a stable rate — and added noise; the
+interactions are largely captured by the trees already. Test accuracy dropped
+from 0.655 to 0.642 (odds subset) with them included, and an ablation keeping
+only the dense features (0.637) did not recover the incumbent either.
+
 ## Caveats
 
 - Fighters are keyed by normalized name; a handful of duplicate names
