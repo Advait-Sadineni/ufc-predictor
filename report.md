@@ -56,10 +56,11 @@ the training-set class frequencies:
 
 | Target | Model | Baseline |
 |---|---|---|
-| 6-way outcome log loss | 1.595 | 1.712 |
+| 6-way outcome log loss | 1.595 | 1.712 (freq) — per-class isotonic REJECTED (2.050) |
 | 6-way outcome top-1 accuracy | 0.340 | 0.242 |
-| Goes the distance — Brier | 0.234 | — |
-| Goes the distance — accuracy | 0.614 | 0.503 (majority class) |
+| Goes the distance — Brier (dedicated model) | 0.236 | 0.234 (6-way-derived) |
+| Goes the distance — accuracy | 0.608 | 0.503 (majority class) |
+| Under 2.5 rounds (3R fights) — Brier | 0.235 | 0.248 (predict base rate) |
 | Total takedowns — MAE | 1.68 | 1.81 (train mean) |
 
 Method-of-victory and distance predictions beat the frequency baselines but,

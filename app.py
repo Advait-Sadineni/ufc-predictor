@@ -97,24 +97,29 @@ with tab_picks:
         dist = r["p_a_dec"] + r["p_b_dec"]
         pick_name = r["fighter_a"] if pick_a else r["fighter_b"]
 
+        def price_bits(side):
+            bits = []
+            if str(r.get(f"rec_{side}", "")) not in ("", "nan"):
+                bits.append(f"UFC record **{r[f'rec_{side}']}**")
+            fd = r.get(f"fanduel_{side}")
+            if pd.notna(fd):
+                bits.append(f"FanDuel {fd:+.0f}")
+            best, bk = r.get(f"best_{side}"), r.get(f"best_{side}_book")
+            if pd.notna(best) and str(bk) != "fanduel" and (
+                    pd.isna(fd) or american_to_dec(best) > american_to_dec(fd) * 1.01):
+                bits.append(f"best {best:+.0f} @ {bk}")
+            return bits
+
         ca, cm, cb = st.columns([3, 4, 3])
         with ca:
             mark = " ✅" if pick_a else ""
             st.markdown(f"### {r['fighter_a']}{mark}")
-            bits = []
-            if str(r.get("rec_a", "")) not in ("", "nan"):
-                bits.append(f"UFC record **{r['rec_a']}**")
-            if pd.notna(r.get("fanduel_a")):
-                bits.append(f"FanDuel {r['fanduel_a']:+.0f}")
+            bits = price_bits("a")
             st.markdown(" · ".join(bits) if bits else "&nbsp;")
         with cb:
             mark = "" if pick_a else " ✅"
             st.markdown(f"### {r['fighter_b']}{mark}")
-            bits = []
-            if str(r.get("rec_b", "")) not in ("", "nan"):
-                bits.append(f"UFC record **{r['rec_b']}**")
-            if pd.notna(r.get("fanduel_b")):
-                bits.append(f"FanDuel {r['fanduel_b']:+.0f}")
+            bits = price_bits("b")
             st.markdown(" · ".join(bits) if bits else "&nbsp;")
         with cm:
             st.markdown(f"<div style='text-align:center'>"
@@ -130,6 +135,17 @@ with tab_picks:
             if why and why != "nan":
                 st.markdown(f"<div style='text-align:center;color:#898781'>"
                             f"<i>edge: {why}</i></div>", unsafe_allow_html=True)
+            if pd.notna(r.get("total_point")):
+                tb = []
+                if pd.notna(r.get("fd_over")):
+                    tb.append(f"FanDuel O {r['fd_over']:+.0f} / U {r['fd_under']:+.0f}")
+                if pd.notna(r.get("best_under")):
+                    tb.append(f"best U {r['best_under']:+.0f} @ {r['best_under_book']}")
+                if pd.notna(r.get("best_over")):
+                    tb.append(f"best O {r['best_over']:+.0f} @ {r['best_over_book']}")
+                st.markdown(f"<div style='text-align:center;color:#898781'>"
+                            f"Round total {r['total_point']}: {' · '.join(tb)}"
+                            f"</div>", unsafe_allow_html=True)
         st.divider()
 
     edges = []
@@ -213,29 +229,42 @@ with tab_parlay:
                     m1_share = meth[0][1] / p_win
                     if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
                         leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                               f"FanDuel's price is generous vs the model — edge: {why}")
+                               f"FanDuel's price is generous vs the model — edge: {why}", fight)
                     elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
                         p_leg = meth[0][1]
                         leg = (p_leg, f"{side} by {meth[0][0]}", "method",
                                est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                               f"{m1_share:.0%} of his win paths end this way — edge: {why}")
+                               f"{m1_share:.0%} of his win paths end this way — edge: {why}", fight)
                     elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
                         p_leg = meth[0][1] + meth[1][1]
                         leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
                                est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                               f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}")
+                               f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}", fight)
                     elif pd.notna(ml_dec):
                         leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                               f"clear pick, no dominant method — edge: {why}")
+                               f"clear pick, no dominant method — edge: {why}", fight)
                 elif max(p_dist, 1 - p_dist) >= TH["shape"]:
-                    p_leg = max(p_dist, 1 - p_dist)
-                    lbl = ("Goes the distance: " if p_dist >= 0.5 else
-                           "Doesn't go the distance: ") + fight
-                    leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
-                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                           "winner too close to call — betting the fight's shape, not a side")
+                    # Real-priced rounds leg (Under/Over 2.5) beats an estimated
+                    # distance leg when FanDuel has posted the total.
+                    pu = r.get("p_u25")
+                    if (pd.notna(pu) and pd.notna(r.get("fd_under"))
+                            and max(pu, 1 - pu) >= TH["shape"] - 0.04):
+                        under = pu >= 0.5
+                        p_leg = pu if under else 1 - pu
+                        o_r = r["fd_under"] if under else r["fd_over"]
+                        leg = (p_leg, f"{'Under' if under else 'Over'} 2.5 rounds: {fight}",
+                               "rounds", american_to_dec(o_r),
+                               f"FanDuel {o_r:+.0f} ({'U' if under else 'O'}2.5)",
+                               "winner too close to call — betting fight length at a real price", fight)
+                    else:
+                        p_leg = max(p_dist, 1 - p_dist)
+                        lbl = ("Goes the distance: " if p_dist >= 0.5 else
+                               "Doesn't go the distance: ") + fight
+                        leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
+                               f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                               "winner too close to call — betting the fight's shape, not a side", fight)
                 if leg:
                     out.append(leg)
             return out
@@ -260,6 +289,7 @@ with tab_parlay:
             c.metric(f"Est. ${stake_t:.0f} returns", f"${stake_t * est_dec:,.2f}")
             if note:
                 st.caption(note)
+            return p_hit, est_dec
 
         if target > 0:
             # Goal mode sees EVERY variant of every fight (moneyline, method,
@@ -301,6 +331,15 @@ with tab_parlay:
                         gc.append((p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                                    f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                                    "betting the fight's shape, not a side", fight))
+                pu = r.get("p_u25")
+                if pd.notna(pu) and pd.notna(r.get("fd_under")):
+                    for p_leg, o_r, tag in [(pu, r["fd_under"], "Under"),
+                                            (1 - pu, r["fd_over"], "Over")]:
+                        if p_leg >= 0.55:
+                            gc.append((p_leg, f"{tag} 2.5 rounds: {fight}", "rounds",
+                                       american_to_dec(o_r),
+                                       f"FanDuel {o_r:+.0f} ({tag[0]}2.5)",
+                                       "fight-length bet at a real price", fight))
             required = (stake + target) / stake
             gc.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
             chosen, est_prod, p_hit, used_f = [], 1.0, 1.0, set()
@@ -339,8 +378,8 @@ with tab_parlay:
                 break
             main.append(c_leg)
             p *= c_leg[0]
-        render_ticket("Main ticket — the convictions, with their methods",
-                      main, main_stake, None)
+        res_main = render_ticket("Main ticket — the convictions, with their methods",
+                                 main, main_stake, None)
         st.divider()
         # Side ticket: breadth — 5-6 likely legs for the big multiplier.
         sc_ = build_cands(dict(m_share=0.48, m_min=0.36, dc_share=0.76, shape=0.57))
@@ -352,11 +391,53 @@ with tab_parlay:
             if p * c_leg[0] >= 0.08 or len(side) < 3:
                 side.append(c_leg)
                 p *= c_leg[0]
-        render_ticket("Side ticket — the breadth play", side, side_stake,
-                      "The two tickets share their strongest legs on purpose — if "
-                      "the favorites all land, both cash. Price each on FanDuel "
-                      "against its estimate; if a quote is below it, pass on that "
-                      "ticket.")
+        res_side = render_ticket("Side ticket — the breadth play", side, side_stake,
+                                 "The two tickets share their strongest legs on purpose — if "
+                                 "the favorites all land, both cash. Price each on FanDuel "
+                                 "against its estimate; if a quote is below it, pass on that "
+                                 "ticket.")
+        if res_main and res_side and main and side:
+            # exact joint across the union of fights (legs matched by fight)
+            mmap = {c[6]: c for c in main}
+            smap = {c[6]: c for c in side}
+            p_both = 1.0
+            for f_id in set(mmap) | set(smap):
+                if f_id in mmap and f_id in smap:
+                    a_leg, b_leg = mmap[f_id], smap[f_id]
+                    p_both *= (a_leg[0] if a_leg[1] == b_leg[1]
+                               else min(a_leg[0], b_leg[0]) * 0.9)
+                else:
+                    p_both *= (mmap.get(f_id) or smap[f_id])[0]
+            pm, dm = res_main
+            ps, ds = res_side
+            st.divider()
+            st.markdown("**Portfolio readout — the night's four outcomes**")
+            q1, q2, q3, q4 = st.columns(4)
+            q1.metric("Both tickets hit", f"{p_both:.0%}",
+                      delta=f"+${main_stake*(dm-1)+side_stake*(ds-1):,.0f}",
+                      delta_color="off")
+            q2.metric("Main only", f"{max(pm - p_both, 0):.0%}",
+                      delta=f"+${main_stake*(dm-1)-side_stake:,.0f}", delta_color="off")
+            q3.metric("Side only", f"{max(ps - p_both, 0):.0%}",
+                      delta=f"+${side_stake*(ds-1)-main_stake:,.0f}", delta_color="off")
+            q4.metric("Both lose", f"{max(1 - pm - ps + p_both, 0):.0%}",
+                      delta=f"-${main_stake+side_stake:,.0f}", delta_color="off")
+            budget = main_stake + side_stake
+
+            def qkelly(p_t, d_t):
+                b = d_t - 1
+                return max((p_t * d_t - 1) / b, 0) / 4 if b > 0 else 0
+            km, ks = qkelly(pm, dm), qkelly(ps, ds)
+            if km + ks > 0:
+                am = budget * km / (km + ks)
+                st.caption(f"Quarter-Kelly split of your ${budget:.0f} (per model "
+                           f"estimates): main ${am:.0f} / side ${budget - am:.0f}. "
+                           f"Suggestion only — Kelly assumes the model's "
+                           f"probabilities are exactly right, and they aren't.")
+            else:
+                st.caption(f"At current estimated prices neither ticket is +EV per "
+                           f"the model — quarter-Kelly says $0/$0. Whatever you "
+                           f"stake is entertainment budget; size it accordingly.")
         st.divider()
 
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):

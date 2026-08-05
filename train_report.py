@@ -276,25 +276,37 @@ def main():
     ci_lo, ci_hi = np.percentile(deltas, [2.5, 97.5])
     p_better = (deltas > 0).mean()
 
-    # ---------- 4b. prop models: 6-way outcome + total takedowns ----------
+    # ---------- 4b. prop models: 6-way outcome + totals/distance/rounds ----------
     print("Training prop models...")
     from props import fit_props, outcome6
-    pred6, predtd = fit_props(train_all, feats)
+    props_m = fit_props(train_all, feats)
     tr6 = train_all.dropna(subset=["method_cls"])
     freq = np.bincount(outcome6(tr6).astype(int), minlength=6) / len(tr6)
     t6 = test.dropna(subset=["method_cls"])
     y6 = outcome6(t6).astype(int).values
-    P6 = pred6(t6[feats])
+    P6 = props_m["outcome6"](t6[feats])
+    P6_cal = props_m["outcome6_cal"](t6[feats])
     ll6 = log_loss(y6, P6, labels=range(6))
+    ll6_cal = log_loss(y6, P6_cal, labels=range(6))
     ll6_base = float(-np.mean(np.log(freq[y6])))
     acc6, acc6_base = (P6.argmax(1) == y6).mean(), (y6 == freq.argmax()).mean()
-    p_dist = P6[:, 2] + P6[:, 5]
     y_dist = ((y6 == 2) | (y6 == 5)).astype(int)
-    dist_brier = brier_score_loss(y_dist, p_dist)
-    dist_acc = accuracy_score(y_dist, p_dist > 0.5)
+    p_dist_6c = P6[:, 2] + P6[:, 5]
+    p_dist_ded = props_m["distance"](t6[feats])
+    dist_brier_6c = brier_score_loss(y_dist, p_dist_6c)
+    dist_brier = brier_score_loss(y_dist, p_dist_ded)
+    dist_acc = accuracy_score(y_dist, p_dist_ded > 0.5)
     dist_base = max(y_dist.mean(), 1 - y_dist.mean())
+    u25_line = ""
+    if props_m["under25"] is not None and "fight_secs" in test.columns:
+        tu = test[(test["sched_rounds"] == 3) & test["fight_secs"].notna()]
+        yu = (tu["fight_secs"] < 750).astype(int)
+        pu = props_m["under25"](tu[feats])
+        naive = yu.mean() * (1 - yu.mean())
+        u25_line = (f"| Under 2.5 rounds (3R fights) — Brier | {brier_score_loss(yu, pu):.3f} "
+                    f"| {naive:.3f} (predict base rate) |\n")
     tt = test.dropna(subset=["total_td"])
-    td_mae = np.abs(predtd(tt[feats]) - tt["total_td"]).mean()
+    td_mae = np.abs(props_m["total_td"](tt[feats]) - tt["total_td"]).mean()
     td_mae_base = np.abs(train_all["total_td"].mean() - tt["total_td"]).mean()
 
     # ---------- 5. permutation importance (full ensemble, log-loss increase) ----------
@@ -407,11 +419,11 @@ the training-set class frequencies:
 
 | Target | Model | Baseline |
 |---|---|---|
-| 6-way outcome log loss | {ll6:.3f} | {ll6_base:.3f} |
+| 6-way outcome log loss | {ll6:.3f} | {ll6_base:.3f} (freq) — per-class isotonic REJECTED ({ll6_cal:.3f}) |
 | 6-way outcome top-1 accuracy | {acc6:.3f} | {acc6_base:.3f} |
-| Goes the distance — Brier | {dist_brier:.3f} | — |
+| Goes the distance — Brier (dedicated model) | {dist_brier:.3f} | {dist_brier_6c:.3f} (6-way-derived) |
 | Goes the distance — accuracy | {dist_acc:.3f} | {dist_base:.3f} (majority class) |
-| Total takedowns — MAE | {td_mae:.2f} | {td_mae_base:.2f} (train mean) |
+{u25_line}| Total takedowns — MAE | {td_mae:.2f} | {td_mae_base:.2f} (train mean) |
 
 Method-of-victory and distance predictions beat the frequency baselines but,
 as with the winner model, should be assumed weaker than prop-market prices —

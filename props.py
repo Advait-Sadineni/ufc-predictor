@@ -47,8 +47,26 @@ def _fit(params, X_tr, y_tr, X_va, y_va, X_all, y_all):
                      num_boost_round=m.best_iteration)
 
 
+def _fit_binary(df, feats, label, cut):
+    """Mirror-augmented binary LightGBM with the standard holdout discipline.
+    `label` is a Series aligned to df (symmetric target — same under mirror)."""
+    tr_m, va_m = df["date"] < cut, df["date"] >= cut
+    X_tr, _ = mirror(df.loc[tr_m, feats], df.loc[tr_m, "a_wins"])
+    y_tr = pd.concat([label[tr_m]] * 2, ignore_index=True)
+    X_all, _ = mirror(df[feats], df["a_wins"])
+    y_all = pd.concat([label] * 2, ignore_index=True)
+    p = _params("binary", {"metric": "binary_logloss"})
+    return _fit(p, X_tr, y_tr, df.loc[va_m, feats], label[va_m], X_all, y_all)
+
+
 def fit_props(df, feats, holdout_days=365):
-    """Returns (predict_outcome6, predict_total_td) trained on `df`."""
+    """Returns a dict of predictors trained on `df`:
+      outcome6(X)   calibrated 6-way winner-x-method probabilities
+      total_td(X)   expected total takedowns
+      distance(X)   P(fight goes the distance) — dedicated binary model
+      under25(X)    P(fight ends before 2.5 rounds) — 3-round fights' market bet
+    """
+    from sklearn.isotonic import IsotonicRegression
     cut = df["date"].max() - pd.Timedelta(days=holdout_days)
 
     d6 = df.dropna(subset=["method_cls"]).copy()
@@ -58,6 +76,18 @@ def fit_props(df, feats, holdout_days=365):
     X_all, y_all = _mirror_cls(d6[feats], y6)
     p6 = _params("multiclass", {"num_class": 6, "metric": "multi_logloss"})
     m6 = _fit(p6, X_tr, y_tr, d6.loc[va_m, feats], y6[va_m], X_all, y_all)
+    # per-class isotonic calibration on the holdout, renormalized to sum to 1
+    P_va = m6.predict(d6.loc[va_m, feats])
+    isos = []
+    for k in range(6):
+        iso = IsotonicRegression(y_min=1e-3, y_max=0.97, out_of_bounds="clip")
+        iso.fit(P_va[:, k], (y6[va_m] == k).astype(int))
+        isos.append(iso)
+
+    def pred6_cal(X):
+        P = m6.predict(X)
+        C = np.column_stack([isos[k].predict(P[:, k]) for k in range(6)])
+        return C / C.sum(axis=1, keepdims=True)
 
     dt = df.dropna(subset=["total_td"]).copy()
     tr_t, va_t = dt["date"] < cut, dt["date"] >= cut
@@ -68,4 +98,24 @@ def fit_props(df, feats, holdout_days=365):
     pt = _params("poisson", {"metric": "rmse"})
     mt = _fit(pt, Xt_tr, yt_tr, dt.loc[va_t, feats], dt.loc[va_t, "total_td"],
               Xt_all, yt_all)
-    return m6.predict, mt.predict
+
+    # dedicated goes-the-distance binary
+    dd = df.dropna(subset=["method_cls"]).copy()
+    m_dist = _fit_binary(dd, feats, (dd["method_cls"] == "dec").astype(int), cut)
+
+    # under-2.5-rounds (< 750s) on 3-round fights — the market's actual bet
+    du = df[(df["sched_rounds"] == 3) & df["fight_secs"].notna()].copy() \
+        if "fight_secs" in df.columns else df.iloc[0:0].copy()
+    m_u25 = (_fit_binary(du, feats, (du["fight_secs"] < 750).astype(int), cut)
+             if len(du) > 500 else None)
+
+    return {
+        # raw 6-class stays primary: per-class isotonic calibration was
+        # evaluated and REJECTED (test logloss 1.60 -> 2.05; holdout too small
+        # per class). Kept under outcome6_cal for the report's record.
+        "outcome6": m6.predict,
+        "outcome6_cal": pred6_cal,
+        "total_td": mt.predict,
+        "distance": m_dist.predict,
+        "under25": (m_u25.predict if m_u25 is not None else None),
+    }

@@ -390,6 +390,7 @@ def replay(res, stats, phys, market, rng):
                 "a_wins": int((outcome == "W/L") == a_first),
                 "method_cls": method_class(r.METHOD),
                 "finish_round": pd.to_numeric(r.ROUND, errors="coerce"),
+                "fight_secs": secs,
                 "total_td": (st1["td_l"] + st2["td_l"]
                              if st1 is not None and st2 is not None else np.nan),
                 "red_corner": 1 if a_first else -1,

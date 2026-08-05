@@ -31,8 +31,12 @@ from sklearn.linear_model import LogisticRegression
 
 ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
 ODDS_API_URL = ("https://api.the-odds-api.com/v4/sports/mma_mixed_martial_arts/odds"
-                "?regions=us&bookmakers=fanduel&markets=h2h&oddsFormat=american&apiKey=")
+                "?regions=us&markets=h2h,totals&oddsFormat=american&apiKey=")
 CACHE_TTL_S = 6 * 3600
+
+
+def _dec(o):
+    return 1 + (o / 100 if o > 0 else 100 / -o)
 BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
 
 WC_LBS = {"Strawweight": 115, "Flyweight": 125, "Bantamweight": 135,
@@ -88,10 +92,15 @@ def fetch_card(refresh, date=None):
     return events[0]
 
 
-def fetch_fanduel(refresh):
-    """FanDuel moneylines via The Odds API. Returns {frozenset(names): {name: odds}}.
+def fetch_books(refresh):
+    """All-US-book odds via The Odds API (h2h + round totals).
 
-    Needs a free key from the-odds-api.com in the ODDS_API_KEY env var.
+    Returns {frozenset(names): info} where info has:
+      fd:    {name: odds}                      FanDuel moneylines (primary book)
+      best:  {name: (odds, book)}              best moneyline across books
+      totals: {point: {"fd": (over, under), "best_over": (odds, book),
+                       "best_under": (odds, book)}}
+    Needs a free key from the-odds-api.com (env ODDS_API_KEY or .odds_api_key).
     """
     import os
     key = os.environ.get("ODDS_API_KEY")
@@ -100,10 +109,10 @@ def fetch_fanduel(refresh):
         key = key_file.read_text().strip()
     if not key:
         return None
-    cache = DATA / "fanduel_odds.json"
+    cache = DATA / "books_odds.json"
     fresh = cache.exists() and time.time() - cache.stat().st_mtime < 3600
     if refresh or not fresh:
-        print("Fetching FanDuel odds (The Odds API)...")
+        print("Fetching odds from all US books (The Odds API)...")
         try:
             cache.write_bytes(urllib.request.urlopen(ODDS_API_URL + key, timeout=60).read())
         except Exception as e:
@@ -112,13 +121,35 @@ def fetch_fanduel(refresh):
                 return None
     book = {}
     for ev in json.loads(cache.read_text(encoding="utf-8")):
+        names = frozenset((norm_name(ev.get("home_team", "")),
+                           norm_name(ev.get("away_team", ""))))
+        if len(names) != 2:
+            continue
+        info = book.setdefault(names, {"fd": {}, "best": {}, "totals": {}})
         for bm in ev.get("bookmakers", []):
+            bk = bm.get("key", "")
             for mkt in bm.get("markets", []):
-                if mkt.get("key") != "h2h":
-                    continue
-                prices = {norm_name(o["name"]): o["price"] for o in mkt.get("outcomes", [])}
-                if len(prices) == 2:
-                    book[frozenset(prices)] = prices
+                if mkt.get("key") == "h2h":
+                    for o in mkt.get("outcomes", []):
+                        n, price = norm_name(o["name"]), o["price"]
+                        if bk == "fanduel":
+                            info["fd"][n] = price
+                        cur = info["best"].get(n)
+                        if cur is None or _dec(price) > _dec(cur[0]):
+                            info["best"][n] = (price, bk)
+                elif mkt.get("key") == "totals":
+                    outs = {o["name"]: o for o in mkt.get("outcomes", [])}
+                    if "Over" not in outs or "Under" not in outs:
+                        continue
+                    pt = outs["Over"].get("point")
+                    t = info["totals"].setdefault(pt, {})
+                    if bk == "fanduel":
+                        t["fd"] = (outs["Over"]["price"], outs["Under"]["price"])
+                    for side_name, cur_key in (("Over", "best_over"), ("Under", "best_under")):
+                        price = outs[side_name]["price"]
+                        cur = t.get(cur_key)
+                        if cur is None or _dec(price) > _dec(cur[0]):
+                            t[cur_key] = (price, bk)
     return book
 
 
@@ -219,7 +250,8 @@ def main():
     print(f"Training on {len(df)} completed fights through {df['date'].max().date()}...")
     predict, f_lgb = train_stack(df, feats)
     from props import fit_props
-    pred6, predtd = fit_props(df, feats)
+    props_m = fit_props(df, feats)
+    pred6, predtd = props_m["outcome6"], props_m["total_td"]
 
     date = event.get("date", "")[:10]
     print(f"\n{event.get('name')}  —  {date}")
@@ -245,11 +277,15 @@ def main():
     probs = predict(X[feats])
     P6 = pred6(X[feats])
     exp_td = predtd(X[feats])
+    p_dists = props_m["distance"](X[feats])
+    p_u25s = (props_m["under25"](X[feats]) if props_m["under25"] is not None
+              else np.full(len(X), np.nan))
     contribs = f_lgb.predict(X[feats], pred_contrib=True)[:, :-1]  # drop bias col
-    book = fetch_fanduel(refresh)
+    book = fetch_books(refresh)
 
     saved, edges = [], []
-    for (n1, n2, abbrev, _, nf1, nf2, rec1, rec2), p, p6, td, cb in zip(brows, probs, P6, exp_td, contribs):
+    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2), p, p6, td, cb, pdm, pu in zip(
+            brows, probs, P6, exp_td, contribs, p_dists, p_u25s):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
         side = p6[:3] if p >= 0.5 else p6[3:]
@@ -264,26 +300,48 @@ def main():
         key = frozenset((norm_name(n1), norm_name(n2)))
         o1 = o2 = np.nan
         saved.append({"card_date": date or "next", "fighter_a": n1, "fighter_b": n2,
+                      "sched_rounds": frow.get("sched_rounds", 3),
                       "p_a": round(float(p), 4),
                       "p_a_ko": round(float(p6[0]), 4), "p_a_sub": round(float(p6[1]), 4),
                       "p_a_dec": round(float(p6[2]), 4), "p_b_ko": round(float(p6[3]), 4),
                       "p_b_sub": round(float(p6[4]), 4), "p_b_dec": round(float(p6[5]), 4),
                       "exp_td": round(float(td), 2),
+                      "p_dist_model": round(float(pdm), 4),
+                      "p_u25": (round(float(pu), 4)
+                                if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)
+                                else np.nan),
                       "rec_a": rec1, "rec_b": rec2,
                       "why": why_string(cb, feats, p >= 0.5)})
         if book and key in book:
-            o1, o2 = book[key][norm_name(n1)], book[key][norm_name(n2)]
-            saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2
-            ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
-            side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
-            side_p = p if ev1 >= ev2 else 1 - p
-            imp = (-side_o / (-side_o + 100)) if side_o < 0 else (100 / (side_o + 100))
-            edges.append((side_p - imp, side_n, side_o, side_p, imp))
-            verdict = (f"model disagrees with FanDuel: {side_n} at {side_o:+.0f} would be "
-                       f"{side_ev:+.0%} EV *if the model is right* — historically the book "
-                       f"wins these arguments" if side_ev > 0.03 else
-                       "model and FanDuel roughly agree — the price is fair minus vig")
-            print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   {verdict}")
+            info = book[key]
+            k1n, k2n = norm_name(n1), norm_name(n2)
+            if k1n in info["fd"] and k2n in info["fd"]:
+                o1, o2 = info["fd"][k1n], info["fd"][k2n]
+                saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2
+            for kn, col in ((k1n, "a"), (k2n, "b")):
+                if kn in info["best"]:
+                    saved[-1][f"best_{col}"], saved[-1][f"best_{col}_book"] = info["best"][kn]
+            pt = frow.get("sched_rounds", 3) - 0.5
+            t = info["totals"].get(pt)
+            if t:
+                saved[-1]["total_point"] = pt
+                if "fd" in t:
+                    saved[-1]["fd_over"], saved[-1]["fd_under"] = t["fd"]
+                if "best_over" in t:
+                    saved[-1]["best_over"], saved[-1]["best_over_book"] = t["best_over"]
+                if "best_under" in t:
+                    saved[-1]["best_under"], saved[-1]["best_under_book"] = t["best_under"]
+            if not np.isnan(o1):
+                ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
+                side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
+                side_p = p if ev1 >= ev2 else 1 - p
+                imp = (-side_o / (-side_o + 100)) if side_o < 0 else (100 / (side_o + 100))
+                edges.append((side_p - imp, side_n, side_o, side_p, imp))
+                verdict = (f"model disagrees with FanDuel: {side_n} at {side_o:+.0f} would be "
+                           f"{side_ev:+.0%} EV *if the model is right* — historically the book "
+                           f"wins these arguments" if side_ev > 0.03 else
+                           "model and FanDuel roughly agree — the price is fair minus vig")
+                print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   {verdict}")
     print("=" * 74)
     if edges:
         print("\nBiggest model-vs-FanDuel disagreements (model side, largest gap first):")
