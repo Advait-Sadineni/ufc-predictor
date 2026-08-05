@@ -209,7 +209,7 @@ def main():
     exp_td = predtd(X[feats])
     book = fetch_fanduel(refresh)
 
-    saved = []
+    saved, edges = [], []
     for (n1, n2, abbrev, _, nf1, nf2), p, p6, td in zip(brows, probs, P6, exp_td):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
@@ -234,12 +234,23 @@ def main():
             saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2
             ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
             side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
+            side_p = p if ev1 >= ev2 else 1 - p
+            imp = (-side_o / (-side_o + 100)) if side_o < 0 else (100 / (side_o + 100))
+            edges.append((side_p - imp, side_n, side_o, side_p, imp))
             verdict = (f"model disagrees with FanDuel: {side_n} at {side_o:+.0f} would be "
                        f"{side_ev:+.0%} EV *if the model is right* — historically the book "
                        f"wins these arguments" if side_ev > 0.03 else
                        "model and FanDuel roughly agree — the price is fair minus vig")
             print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   {verdict}")
     print("=" * 74)
+    if edges:
+        print("\nBiggest model-vs-FanDuel disagreements (model side, largest gap first):")
+        for gap, n, o, mp, imp in sorted(edges, reverse=True)[:5]:
+            if gap <= 0.02:
+                break
+            print(f"  {n:24} {o:+.0f}   model {mp:.0%} vs market {imp:.0%}  (gap {gap:+.0%})")
+        print("  The market side of large gaps has historically been right more often")
+        print("  than the model side — treat these as questions, not answers.\n")
     preds_dir = Path(__file__).parent / "predictions"
     preds_dir.mkdir(exist_ok=True)
     stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
