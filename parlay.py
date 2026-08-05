@@ -158,6 +158,21 @@ def main():
     print(f"  On FanDuel, only take it above {fair_american(p_full * 0.8):+.0f}"
           f" (fair + 25% cushion) -> ${25 * (1 + (fair_american(p_full * 0.8)) / 100):.0f}+ payout on $25.")
 
+    # ---- double-chance parlay: each leg drops only the pick's LEAST likely method ----
+    print("\n" + "#" * 74)
+    print(f"\nDOUBLE CHANCE PARLAY — winner by either of their two best methods ({n_full} legs):")
+    p_dc = 1.0
+    for l in full_legs:
+        ranked = sorted(l["methods"].items(), key=lambda kv: kv[1], reverse=True)
+        (m1, p1), (m2, p2) = ranked[0], ranked[1]
+        p_leg = p1 + p2
+        p_dc *= p_leg
+        print(f"  {l['side']:26} by {m1} or {m2:7}  model {p_leg:.0%}   "
+              f"fair odds {fair_american(p_leg):+.0f}")
+    print(f"  P(all hit): model {p_dc:.1%}   fair combined {fair_american(p_dc):+.0f}")
+    print(f"  On FanDuel, only take it above {fair_american(p_dc * 0.8):+.0f}"
+          f" (fair + 25% cushion) -> ${25 * (1 + (fair_american(p_dc * 0.8)) / 100):.0f}+ payout on $25.")
+
     methods = []
     for _, r in df.iterrows():
         for side, tag, p in [(r["fighter_a"], "by KO/TKO", r["p_a_ko"]),
