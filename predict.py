@@ -30,6 +30,8 @@ import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 
 ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
+ODDS_API_URL = ("https://api.the-odds-api.com/v4/sports/mma_mixed_martial_arts/odds"
+                "?regions=us&bookmakers=fanduel&markets=h2h&oddsFormat=american&apiKey=")
 CACHE_TTL_S = 6 * 3600
 BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
 
@@ -50,6 +52,43 @@ def fetch_card(refresh, date=None):
     if not events:
         sys.exit(f"No UFC event found{' on ' + date if date else ''}.")
     return events[0]
+
+
+def fetch_fanduel(refresh):
+    """FanDuel moneylines via The Odds API. Returns {frozenset(names): {name: odds}}.
+
+    Needs a free key from the-odds-api.com in the ODDS_API_KEY env var.
+    """
+    import os
+    key = os.environ.get("ODDS_API_KEY")
+    if not key:
+        return None
+    cache = DATA / "fanduel_odds.json"
+    fresh = cache.exists() and time.time() - cache.stat().st_mtime < 3600
+    if refresh or not fresh:
+        print("Fetching FanDuel odds (The Odds API)...")
+        try:
+            cache.write_bytes(urllib.request.urlopen(ODDS_API_URL + key, timeout=60).read())
+        except Exception as e:
+            print(f"  odds fetch failed: {e}")
+            if not cache.exists():
+                return None
+    book = {}
+    for ev in json.loads(cache.read_text(encoding="utf-8")):
+        for bm in ev.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                if mkt.get("key") != "h2h":
+                    continue
+                prices = {norm_name(o["name"]): o["price"] for o in mkt.get("outcomes", [])}
+                if len(prices) == 2:
+                    book[frozenset(prices)] = prices
+    return book
+
+
+def ev_per_dollar(p, odds):
+    """Expected profit per $1 staked at American odds, given win probability p."""
+    b = odds / 100 if odds > 0 else 100 / -odds
+    return p * b - (1 - p)
 
 
 def parse_weight(abbrev):
@@ -165,6 +204,7 @@ def main():
     probs = predict(X[feats])
     P6 = pred6(X[feats])
     exp_td = predtd(X[feats])
+    book = fetch_fanduel(refresh)
 
     for (n1, n2, abbrev, _, nf1, nf2), p, p6, td in zip(brows, probs, P6, exp_td):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
@@ -177,9 +217,23 @@ def main():
         print(f"{n1:24} vs {n2:24} {abbrev}")
         print(f"    -> {pick} {pp:.0%}  (KO {ko:.0%} | Sub {sub:.0%} | Dec {dec:.0%})"
               f"   distance {dist:.0%}   exp. takedowns {td:.1f}{flags}")
+        key = frozenset((norm_name(n1), norm_name(n2)))
+        if book and key in book:
+            o1, o2 = book[key][norm_name(n1)], book[key][norm_name(n2)]
+            ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
+            side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
+            verdict = (f"model disagrees with FanDuel: {side_n} at {side_o:+.0f} would be "
+                       f"{side_ev:+.0%} EV *if the model is right* — historically the book "
+                       f"wins these arguments" if side_ev > 0.03 else
+                       "model and FanDuel roughly agree — the price is fair minus vig")
+            print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   {verdict}")
     print("=" * 74)
+    if not book:
+        print("FanDuel lines: set ODDS_API_KEY (free key from the-odds-api.com) to")
+        print("compare picks against FanDuel prices.")
     print("Model probabilities are calibrated to ~±3% (see report.md) but do NOT")
-    print("beat closing odds. This is not betting advice.")
+    print("beat closing odds. Per report.md the model's edge does not clear the vig:")
+    print("expected value of betting these picks is negative. Not betting advice.")
 
 
 if __name__ == "__main__":

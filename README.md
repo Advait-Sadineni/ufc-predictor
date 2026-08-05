@@ -93,6 +93,8 @@ python build_features.py  # replay fight history -> data/features.csv (leak-free
 python train_report.py    # tune, train, evaluate -> report.md + plots/
 python predict.py         # picks for the next card: winner, method, distance, takedowns
 python predict.py --date=20260815   # ...or any scheduled card by date
+# optional: set ODDS_API_KEY (free, the-odds-api.com) to compare picks
+# against FanDuel moneylines, with model-vs-book EV shown per disagreement
 python track_bets.py ...  # personal bet log: add / result / report (P/L, CLV)
 ```
 
