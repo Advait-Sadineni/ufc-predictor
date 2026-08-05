@@ -165,18 +165,20 @@ with tab_parlay:
     legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
     legs.sort(key=lambda l: l["p"], reverse=True)
 
-    if st.toggle("✨ Suggested parlay — model builds the ticket for your risk level"):
-        profile = st.select_slider(
-            "Risk level (target chance the whole ticket hits)",
-            ["Safe (~35%)", "Balanced (~25%)", "Aggressive (~15%)"],
-            value="Balanced (~25%)")
-        floor = {"S": 0.35, "B": 0.25, "A": 0.15}[profile[0]]
+    if st.toggle("🎯 The Play — the model's ticket for this card", value=True):
+        with st.expander("Adjust risk (default: Balanced)"):
+            profile = st.select_slider(
+                "Target chance the whole ticket hits",
+                ["Safe (~35%)", "Balanced (~25%)", "Aggressive (~15%)", "Longshot (~5%)"],
+                value="Balanced (~25%)")
+        floor = {"S": 0.35, "B": 0.25, "A": 0.15, "L": 0.05}[profile[0]]
         # The dial also controls how spicy each leg's TYPE gets: Safe takes the
-        # conservative variant of a fight, Aggressive upgrades the same fight to
-        # its method play (lower probability, much bigger multiplier).
+        # conservative variant of a fight; Aggressive/Longshot upgrade the same
+        # fight to its method play (lower probability, much bigger multiplier).
         TH = {"S": dict(m_share=0.62, m_min=0.45, dc_share=0.88, shape=0.62),
               "B": dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60),
-              "A": dict(m_share=0.48, m_min=0.38, dc_share=0.78, shape=0.58)}[profile[0]]
+              "A": dict(m_share=0.48, m_min=0.38, dc_share=0.78, shape=0.58),
+              "L": dict(m_share=0.42, m_min=0.33, dc_share=0.75, shape=0.56)}[profile[0]]
         PROP_HAIRCUT = 0.85  # assume FanDuel pays ~15% under fair on unpriced legs
 
         # Every leg option for every fight; score = p x payout multiple, i.e. the
@@ -204,33 +206,39 @@ with tab_parlay:
             # overrides the method upgrade — verifiable value beats structure.
             leg = None
             ml_dec = american_to_dec(o) if pd.notna(o) else np.nan
+            why = str(r.get("why", "")) if "why" in df.columns else ""
             if p_win >= 0.62:
                 m1_share = meth[0][1] / p_win
                 if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
-                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}")
+                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
+                           f"FanDuel's price is generous vs the model — edge: {why}")
                 elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
                     p_leg = meth[0][1]
                     leg = (p_leg, f"{side} by {meth[0][0]}", "method",
                            (1 / p_leg) * PROP_HAIRCUT,
-                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                           f"{m1_share:.0%} of his win paths end this way — edge: {why}")
                 elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
                     p_leg = meth[0][1] + meth[1][1]
                     leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
                            (1 / p_leg) * PROP_HAIRCUT,
-                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                           f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}")
                 elif pd.notna(ml_dec):
-                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}")
+                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
+                           f"clear pick, no dominant method — edge: {why}")
             elif max(p_dist, 1 - p_dist) >= TH["shape"]:
                 p_leg = max(p_dist, 1 - p_dist)
                 lbl = ("Goes the distance: " if p_dist >= 0.5 else
                        "Doesn't go the distance: ") + fight
                 leg = (p_leg, lbl, "fight-level", (1 / p_leg) * PROP_HAIRCUT,
-                       f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+                       f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                       "winner too close to call — betting the fight's shape, not a side")
             if leg:
                 cands.append(leg)
         # Safe/Balanced fill by confidence (most likely legs first); Aggressive
-        # fills by payout multiplier (fewer, spicier legs for the same floor).
-        cands.sort(key=lambda t: t[0] if profile[0] != "A" else t[3], reverse=True)
+        # and Longshot fill by payout multiplier (fewer, spicier legs).
+        cands.sort(key=lambda t: t[0] if profile[0] in "SB" else t[3], reverse=True)
         chosen, p_hit = [], 1.0
         for c_leg in cands:
             if len(chosen) >= 6:
@@ -243,7 +251,7 @@ with tab_parlay:
         else:
             est_dec = float(np.prod([c[3] for c in chosen]))
             rows_s = [{"Leg": c[1], "Type": c[2], "Model": c[0],
-                       "EV score": round(c[0] * c[3], 2), "Price": c[4]} for c in chosen]
+                       "Price": c[4], "Why this leg": c[5]} for c in chosen]
             st.dataframe(pd.DataFrame(rows_s),
                          column_config={"Model": st.column_config.NumberColumn(format="percent")},
                          hide_index=True, width="stretch")
