@@ -43,6 +43,11 @@ def no_vig_side(o_side, o_other):
     return pa / (pa + pb)
 
 
+def fair_american(p):
+    """The American odds at which a probability-p bet is exactly break-even."""
+    return -p / (1 - p) * 100 if p >= 0.5 else (1 - p) / p * 100
+
+
 def load_snapshot(date_filter):
     files = sorted(PREDS.glob("*.csv"), key=lambda p: p.stat().st_mtime)
     if date_filter:
@@ -143,9 +148,6 @@ def main():
               f"${h:.2f} on {last['other']} at {last['odds_other']:+.0f} locks ${locked:+.2f}.")
 
     # ---- full method ticket: primary-parlay fighters, each leg = their best method ----
-    def fair_american(p):
-        return -p / (1 - p) * 100 if p >= 0.5 else (1 - p) / p * 100
-
     n_full = min(max(leg_sizes), len(eligible))
     full_legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_full]
     full_legs.sort(key=lambda l: l["p_model"], reverse=True)

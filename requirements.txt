@@ -4,3 +4,4 @@ scikit-learn>=1.4
 lightgbm>=4.0
 xgboost>=2.0
 matplotlib>=3.8
+streamlit>=1.40
