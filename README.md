@@ -91,10 +91,14 @@ pip install -r requirements.txt
 python demo.py            # Phase 1 demo: logistic baseline on pre-built data
 python build_features.py  # replay fight history -> data/features.csv (leak-free)
 python train_report.py    # tune, train, evaluate -> report.md + plots/
+python predict.py         # win probabilities for the next UFC card (ESPN API)
+python track_bets.py ...  # personal bet log: add / result / report (P/L, CLV)
 ```
 
-All downloads are cached under `data/` on first run; later runs are offline.
-Seeds are fixed (42) — reruns reproduce the reported numbers.
+All downloads are cached under `data/` on first run (`--refresh` re-fetches,
+including new events). Seeds are fixed (42) — reruns reproduce the reported
+numbers. `predict.py` prints calibrated probabilities only — per the report the
+model does not beat closing odds, and it will tell you so itself.
 
 ## Tasks
 
@@ -102,9 +106,10 @@ Seeds are fixed (42) — reruns reproduce the reported numbers.
 - [x] Phase 2: leak-free features, Elo, LightGBM, expanding-window CV, calibration report
 - [x] Phase 3: strike-location/position mixes, recent form, opponent quality, finish-weighted Elo, rankings, stacked LGB+XGB+logistic ensemble
 - [x] Phase 4 (negative result): style-matchup splits, trait interactions, and a cut-severity proxy were built, evaluated, and rejected — too sparse, no test-set improvement (see report.md § Negative results)
-- [ ] Picks mode: `predict.py` for upcoming cards (win probabilities only — no bet sizing, by design)
+- [x] Picks mode: `predict.py` for upcoming cards (win probabilities only — no bet sizing, by design)
+- [x] Data refresh (`--refresh`) and personal bet log with closing-line-value report (`track_bets.py`)
 - [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
-- [ ] Auto-refresh data for new events
+- [ ] Pre-UFC records for debut fighters (model is weakest on debuts)
 
 ## Contact
 

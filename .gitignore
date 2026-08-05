@@ -1,2 +1,4 @@
 data/
 __pycache__/
+bets.csv
+espn_probe.json

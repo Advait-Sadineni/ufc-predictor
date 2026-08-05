@@ -15,7 +15,9 @@ Run: python build_features.py   ->  data/features.csv
 """
 
 import re
+import sys
 import unicodedata
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +25,32 @@ import pandas as pd
 
 SEED = 42
 DATA = Path(__file__).parent / "data"
+RAW_FILES = ["ufc_fight_stats.csv", "ufc_fight_results.csv",
+             "ufc_fighter_tott.csv", "ufc_event_details.csv"]
+RAW_BASE = "https://raw.githubusercontent.com/Greco1899/scrape_ufc_stats/main/"
+MASTER_MIRRORS = [
+    "https://raw.githubusercontent.com/shortlikeafox/ultimate_ufc_dataset/main/ufc-master.csv",
+    "https://raw.githubusercontent.com/shortlikeafox/ultimate_ufc_dataset/master/ufc-master.csv",
+]
+
+
+def ensure_data(refresh=False):
+    """Download any missing source CSVs (or all of them with refresh=True)."""
+    DATA.mkdir(exist_ok=True)
+    for f in RAW_FILES:
+        path = DATA / f
+        if refresh or not path.exists():
+            print(f"Downloading {f} ...")
+            path.write_bytes(urllib.request.urlopen(RAW_BASE + f, timeout=120).read())
+    path = DATA / "ufc-master.csv"
+    if refresh or not path.exists():
+        for url in MASTER_MIRRORS:
+            try:
+                print("Downloading ufc-master.csv ...")
+                path.write_bytes(urllib.request.urlopen(url, timeout=120).read())
+                break
+            except Exception as e:
+                print(f"  mirror failed: {e}")
 FORM_N = 3          # "recent form" window (fights)
 FINISH_K_MULT = 1.4  # Elo update boost for KO/sub wins
 
@@ -281,11 +309,10 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
     })
 
 
-def main():
-    rng = np.random.default_rng(SEED)
-    res, stats, phys = load_raw()
-    market = load_market()
-
+def replay(res, stats, phys, market, rng):
+    """Replay history in date order. Returns (feature rows, fighter states,
+    division size stats) — states/div_stats reflect everything up to today,
+    which is what predict.py needs for upcoming fights."""
     res = res[res["date"].notna()].sort_values(["date", "EVENT", "BOUT"]).reset_index(drop=True)
     states, rows = {}, []
     div_stats = {}  # weight_lbs -> [height_sum, height_n, reach_sum, reach_n], pre-fight
@@ -393,6 +420,15 @@ def main():
                 div[0] += h; div[1] += 1
             if pd.notna(rr):
                 div[2] += rr; div[3] += 1
+    return rows, states, div_stats, matched_odds
+
+
+def main():
+    ensure_data(refresh="--refresh" in sys.argv)
+    rng = np.random.default_rng(SEED)
+    res, stats, phys = load_raw()
+    market = load_market()
+    rows, states, div_stats, matched_odds = replay(res, stats, phys, market, rng)
 
     df = pd.DataFrame(rows)
     out = DATA / "features.csv"
