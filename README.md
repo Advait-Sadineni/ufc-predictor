@@ -28,10 +28,12 @@ closing betting line. The deliverable is a **calibration report**
 What makes it defensible:
 
 - **Leak-free features.** `build_features.py` replays UFC history in date order,
-  maintaining per-fighter career state (records, per-minute striking/grappling
-  rates, Elo ratings, layoffs). Every feature is computed strictly from fights
-  *before* the one being predicted — nothing is trusted from pre-aggregated
-  datasets.
+  maintaining per-fighter career state: records, per-minute striking/grappling
+  rates, strike-target and position mixes (head/body/leg, distance/clinch/ground),
+  recent-form windows, opponent quality (average opponent Elo), finish-weighted
+  Elo with peak-decline tracking, layoffs, weight-class changes, and official
+  rankings — 87 features, every one computed strictly from fights *before* the
+  one being predicted. Nothing is trusted from pre-aggregated datasets.
 - **Strict temporal validation.** Train on fights through 2023-06-03, test on
   the 1,625 fights after. Hyperparameters tuned with 4-fold expanding-window CV
   inside the train period; isotonic calibration and the market blend are fitted
@@ -46,8 +48,8 @@ Test set = 1,200 post-June-2023 fights with closing odds:
 | Predictor | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|
 | Market (no-vig closing odds) | 0.702 | 0.582 | 0.198 | 0.030 |
-| LightGBM (45 leak-free features) | 0.639 | 0.639 | 0.224 | 0.033 |
-| **Blend: market + model** | **0.705** | **0.577** | **0.197** | **0.027** |
+| Stacked ensemble (LGB + XGB + logistic, 87 features) | 0.655 | 0.633 | 0.221 | 0.047 |
+| **Blend: market + model** | **0.707** | **0.577** | **0.197** | **0.030** |
 
 **The model does not beat the closing line** — no public-data model should be
 expected to: closing odds aggregate information (injuries, camp reports, weight
@@ -55,18 +57,18 @@ cuts, sharp money) that historical stats cannot see. That is why beating the
 closing line, not raw accuracy, is the real benchmark, and why a model claiming
 to beat it from public data is usually leaking.
 
-The more interesting finding: **blending the model with the market beats the
-market alone** (log loss 0.577 vs 0.582; better in 97.4% of 10,000 paired
-bootstrap resamples, 95% CI on the difference [−0.0001, +0.0089] — suggestive
-but just short of conclusive). The model's probabilities are also nearly as
-well-calibrated as the market's (ECE 0.033 vs 0.030). Full analysis, reliability
-diagram, and feature-importance writeup: **[report.md](report.md)**.
+The interesting finding: **the model carries information the market misses.**
+Blending model with market beats the market alone (log loss 0.577 vs 0.582),
+and the edge is statistically significant — better in 99.3% of 10,000 paired
+bootstrap resamples, 95% CI on the difference [+0.0010, +0.0094]. It is still
+far too small to clear a sportsbook's vig. Full analysis, reliability diagram,
+and feature-importance writeup: **[report.md](report.md)**.
 
 ## Built With
 
 [![Python][python-shield]][python-url]
 
-pandas · scikit-learn · LightGBM · matplotlib. Data: raw ufcstats.com scrapes
+pandas · scikit-learn · LightGBM · XGBoost · matplotlib. Data: raw ufcstats.com scrapes
 ([Greco1899/scrape_ufc_stats](https://github.com/Greco1899/scrape_ufc_stats))
 plus closing odds from the
 [Ultimate UFC Dataset](https://github.com/shortlikeafox/ultimate_ufc_dataset).
@@ -98,6 +100,7 @@ Seeds are fixed (42) — reruns reproduce the reported numbers.
 
 - [x] Phase 1: demo slice (logistic regression, temporal split, market baseline)
 - [x] Phase 2: leak-free features, Elo, LightGBM, expanding-window CV, calibration report
+- [x] Phase 3: strike-location/position mixes, recent form, opponent quality, finish-weighted Elo, rankings, stacked LGB+XGB+logistic ensemble
 - [ ] Picks mode: `predict.py` for upcoming cards (win probabilities only — no bet sizing, by design)
 - [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
 - [ ] Auto-refresh data for new events

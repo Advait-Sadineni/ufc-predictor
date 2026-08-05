@@ -1,9 +1,10 @@
 """Train UFC winner models on leak-free features and write the calibration report.
 
 Pipeline (all temporal, no random splits):
-  1. Expanding-window CV (4 folds, 2016-2023) tunes LightGBM and produces
-     out-of-fold predictions used to fit an isotonic calibrator and the
-     market-blend logistic — so nothing downstream ever sees test data.
+  1. Expanding-window CV (4 folds, 2016-2023) tunes LightGBM and XGBoost, and
+     produces out-of-fold predictions for the three base models (LGB, XGB,
+     logistic). The stacking combiner, isotonic calibrator, and market blend
+     are all fitted on those OOF predictions — nothing ever sees test data.
   2. Final models train on fights up to 2023-06-03 (same cutoff as demo.py)
      and are evaluated once on everything after.
   3. Outputs: report.md + plots/ (reliability diagram, feature importance).
@@ -20,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
@@ -41,9 +43,15 @@ C_GRID, C_MUTED, C_INK, C_INK2 = "#e1e0d9", "#898781", "#0b0b0b", "#52514e"
 SNAP_FEATS = ["elo", "n_fights", "win_pct", "win_streak", "lose_streak", "slpm",
               "sapm", "str_acc", "str_def", "td_avg", "td_acc", "td_def",
               "sub_att_p15", "kd_p15", "kd_taken_p15", "ctrl_min_share",
-              "finish_rate", "dec_win_rate", "layoff_days", "age", "height", "reach"]
+              "finish_rate", "dec_win_rate", "layoff_days", "age", "height", "reach",
+              "head_share", "leg_share", "ground_str_share", "clinch_str_share",
+              "absorbed_head_share", "absorbed_ground_share",
+              "form_win", "form_slpm", "form_sapm", "form_td15",
+              "form_finished", "form_was_finished", "avg_opp_elo", "form_opp_elo",
+              "peak_elo", "elo_decline", "five_rd_fights", "weight_change"]
 CONTEXT = ["title_bout", "women", "sched_rounds", "weight_lbs"]
-ANTISYM = [f"{f}_diff" for f in SNAP_FEATS] + ["red_corner", "southpaw_vs_orthodox"]
+ANTISYM = ([f"{f}_diff" for f in SNAP_FEATS]
+           + ["red_corner", "southpaw_vs_orthodox", "rank_adv", "ranked_diff"])
 
 
 def load():
@@ -76,6 +84,26 @@ def fit_lgb(params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
                          valid_sets=[lgb.Dataset(X_val, y_val, reference=tr)],
                          callbacks=[lgb.early_stopping(100, verbose=False)])
     return lgb.train(params, tr, num_boost_round=n_rounds)
+
+
+def xgb_params(depth, eta, mcw):
+    return dict(objective="binary:logistic", eval_metric="logloss", max_depth=depth,
+                eta=eta, min_child_weight=mcw, subsample=0.8, colsample_bytree=0.8,
+                seed=SEED, nthread=-1)
+
+
+def fit_xgb(params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
+    dtr = xgb.DMatrix(X_tr, y_tr)
+    if X_val is not None:
+        return xgb.train(params, dtr, num_boost_round=n_rounds,
+                         evals=[(xgb.DMatrix(X_val, y_val), "val")],
+                         early_stopping_rounds=100, verbose_eval=False)
+    return xgb.train(params, dtr, num_boost_round=n_rounds)
+
+
+def make_logistic():
+    return make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
+                         LogisticRegression(random_state=SEED, max_iter=2000))
 
 
 def american_to_prob(odds):
@@ -133,56 +161,83 @@ def main():
     test = df[df["date"] > CUTOFF]
     X_te, y_te = test[feats], test["a_wins"]
 
-    # ---------- 1. expanding-window CV: tune LightGBM ----------
-    print("Tuning LightGBM with expanding-window CV...")
-    grid = [(nl, lr, mcs) for nl in (15, 31, 63) for lr in (0.03, 0.06) for mcs in (20, 60)]
-    results = {}
-    for cfg in grid:
-        losses, iters = [], []
-        for start, end in CV_FOLDS:
-            tr = df[df["date"] < start]
-            va = df[(df["date"] >= start) & (df["date"] < end)]
-            Xm, ym = mirror(tr[feats], tr["a_wins"])
-            m = fit_lgb(lgb_params(*cfg), Xm, ym, 3000, va[feats], va["a_wins"])
-            losses.append(log_loss(va["a_wins"], m.predict(va[feats])))
-            iters.append(m.best_iteration)
-        results[cfg] = (np.mean(losses), int(np.mean(iters)))
-        print(f"  leaves={cfg[0]:3d} lr={cfg[1]} mcs={cfg[2]:3d}  cv_logloss={np.mean(losses):.4f}")
-    best_cfg = min(results, key=lambda c: results[c][0])
-    best_cv_loss, best_iters = results[best_cfg]
-    print(f"best: leaves={best_cfg[0]} lr={best_cfg[1]} mcs={best_cfg[2]} "
-          f"(cv_logloss={best_cv_loss:.4f}, avg_iters={best_iters})")
+    # ---------- 1. expanding-window CV: tune LightGBM and XGBoost ----------
+    def tune(name, grid, param_fn, fit_fn, pred_fn):
+        results = {}
+        for cfg in grid:
+            losses, iters = [], []
+            for start, end in CV_FOLDS:
+                tr = df[df["date"] < start]
+                va = df[(df["date"] >= start) & (df["date"] < end)]
+                Xm, ym = mirror(tr[feats], tr["a_wins"])
+                m = fit_fn(param_fn(*cfg), Xm, ym, 3000, va[feats], va["a_wins"])
+                losses.append(log_loss(va["a_wins"], pred_fn(m, va[feats])))
+                iters.append(m.best_iteration)
+            results[cfg] = (np.mean(losses), int(np.mean(iters)))
+        best = min(results, key=lambda c: results[c][0])
+        print(f"{name} best: {best} cv_logloss={results[best][0]:.4f} iters={results[best][1]}")
+        return best, results[best]
 
-    # ---------- 2. out-of-fold predictions with best params ----------
+    pred_lgb = lambda m, X: m.predict(X)
+    pred_xgb = lambda m, X: m.predict(xgb.DMatrix(X))
+    print("Tuning LightGBM...")
+    lgb_grid = [(nl, lr, mcs) for nl in (15, 31, 63) for lr in (0.03, 0.06) for mcs in (20, 60)]
+    best_lgb, (cv_lgb, iters_lgb) = tune("LightGBM", lgb_grid, lgb_params, fit_lgb, pred_lgb)
+    print("Tuning XGBoost...")
+    xgb_grid = [(d, e, w) for d in (3, 5) for e in (0.03, 0.06) for w in (5, 20)]
+    best_xgb, (cv_xgb, iters_xgb) = tune("XGBoost", xgb_grid, xgb_params, fit_xgb, pred_xgb)
+
+    # ---------- 2. out-of-fold predictions for stack / calibration / blend ----------
+    print("Building out-of-fold predictions...")
     oof = []
     for start, end in CV_FOLDS:
         tr = df[df["date"] < start]
         va = df[(df["date"] >= start) & (df["date"] < end)].copy()
         Xm, ym = mirror(tr[feats], tr["a_wins"])
-        m = fit_lgb(lgb_params(*best_cfg), Xm, ym, 3000, va[feats], va["a_wins"])
-        va["p_oof"] = m.predict(va[feats])
+        va["p_lgb"] = pred_lgb(fit_lgb(lgb_params(*best_lgb), Xm, ym, 3000,
+                                       va[feats], va["a_wins"]), va[feats])
+        va["p_xgb"] = pred_xgb(fit_xgb(xgb_params(*best_xgb), Xm, ym, 3000,
+                                       va[feats], va["a_wins"]), va[feats])
+        lo = make_logistic().fit(Xm, ym)
+        va["p_log"] = lo.predict_proba(va[feats])[:, 1]
         oof.append(va)
     oof = pd.concat(oof)
-    iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
-    iso.fit(oof["p_oof"], oof["a_wins"])
 
-    # blend fit on OOF fights that have odds (market + model -> logistic)
+    def stack_X(p1, p2, p3):
+        return np.column_stack([logit(p1), logit(p2), logit(p3)])
+
+    stacker = LogisticRegression(random_state=SEED)
+    stacker.fit(stack_X(oof["p_lgb"], oof["p_xgb"], oof["p_log"]), oof["a_wins"])
+    oof["p_ens"] = stacker.predict_proba(
+        stack_X(oof["p_lgb"], oof["p_xgb"], oof["p_log"]))[:, 1]
+    print(f"stack weights (lgb, xgb, logistic): {np.round(stacker.coef_[0], 3)}")
+
+    iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
+    iso.fit(oof["p_ens"], oof["a_wins"])
+
     oof_odds = oof[oof["odds_a"].notna() & oof["odds_b"].notna()]
     p_mkt_oof = no_vig(oof_odds["odds_a"].values, oof_odds["odds_b"].values)
     blend = LogisticRegression(random_state=SEED)
-    blend.fit(np.column_stack([logit(p_mkt_oof), logit(oof_odds["p_oof"])]),
+    blend.fit(np.column_stack([logit(p_mkt_oof), logit(oof_odds["p_ens"])]),
               oof_odds["a_wins"])
 
     # ---------- 3. final models on full train, evaluated once on test ----------
+    print("Training final models...")
     Xm, ym = mirror(train_all[feats], train_all["a_wins"])
-    final = fit_lgb(lgb_params(*best_cfg), Xm, ym, best_iters)
-    p_gbm = final.predict(X_te)
-    p_iso = iso.predict(p_gbm)
+    final_lgb = fit_lgb(lgb_params(*best_lgb), Xm, ym, iters_lgb)
+    final_xgb = fit_xgb(xgb_params(*best_xgb), Xm, ym, iters_xgb)
+    final_log = make_logistic().fit(Xm, ym)
 
-    logistic = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
-                             LogisticRegression(random_state=SEED, max_iter=2000))
-    logistic.fit(Xm, ym)
-    p_log = logistic.predict_proba(X_te)[:, 1]
+    def predict_ensemble(X):
+        return stacker.predict_proba(stack_X(
+            pred_lgb(final_lgb, X), pred_xgb(final_xgb, X),
+            final_log.predict_proba(X)[:, 1]))[:, 1]
+
+    p_lgb_te = pred_lgb(final_lgb, X_te)
+    p_xgb_te = pred_xgb(final_xgb, X_te)
+    p_log_te = final_log.predict_proba(X_te)[:, 1]
+    p_ens = stacker.predict_proba(stack_X(p_lgb_te, p_xgb_te, p_log_te))[:, 1]
+    p_iso = iso.predict(p_ens)
 
     elo_only = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
                              LogisticRegression(random_state=SEED))
@@ -190,27 +245,23 @@ def main():
     p_elo = elo_only.predict_proba(test[["elo_diff"]])[:, 1]
 
     rows_full = [
-        metrics_row("LightGBM", y_te, p_gbm),
-        metrics_row("LightGBM + isotonic", y_te, p_iso),
-        metrics_row("Logistic regression (full features)", y_te, p_log),
+        metrics_row("Stacked ensemble (LGB+XGB+logistic)", y_te, p_ens),
+        metrics_row("Ensemble + isotonic", y_te, p_iso),
+        metrics_row("LightGBM", y_te, p_lgb_te),
+        metrics_row("XGBoost", y_te, p_xgb_te),
+        metrics_row("Logistic regression (full features)", y_te, p_log_te),
         metrics_row("Elo only (logistic)", y_te, p_elo),
-        metrics_row("Better record baseline", y_te,
-                    np.where(test["win_pct_diff"].fillna(0) != 0,
-                             (test["win_pct_diff"].fillna(0) > 0).astype(float), 0.5) * 0.98 + 0.01,
-                    note="hard picks scored as 0.99/0.5/0.01"),
     ]
 
     # ---------- 4. market comparison on the odds subset ----------
     ot = test[test["odds_a"].notna() & test["odds_b"].notna()]
     yo = ot["a_wins"]
     p_mkt = no_vig(ot["odds_a"].values, ot["odds_b"].values)
-    p_gbm_o = final.predict(ot[feats])
-    p_iso_o = iso.predict(p_gbm_o)
-    p_blend = blend.predict_proba(np.column_stack([logit(p_mkt), logit(p_gbm_o)]))[:, 1]
+    p_ens_o = predict_ensemble(ot[feats])
+    p_blend = blend.predict_proba(np.column_stack([logit(p_mkt), logit(p_ens_o)]))[:, 1]
     rows_mkt = [
         metrics_row("Market (no-vig closing odds)", yo, p_mkt),
-        metrics_row("LightGBM", yo, p_gbm_o),
-        metrics_row("LightGBM + isotonic", yo, p_iso_o),
+        metrics_row("Stacked ensemble", yo, p_ens_o),
         metrics_row("Blend: market + model", yo, p_blend,
                     note=f"logit blend, model coef={blend.coef_[0][1]:+.3f}"),
     ]
@@ -225,18 +276,19 @@ def main():
     ci_lo, ci_hi = np.percentile(deltas, [2.5, 97.5])
     p_better = (deltas > 0).mean()
 
-    # ---------- 5. permutation importance (test set, log-loss increase) ----------
+    # ---------- 5. permutation importance (full ensemble, log-loss increase) ----------
+    print("Computing permutation importance (ensemble)...")
     rng = np.random.default_rng(SEED)
-    base = log_loss(y_te, p_gbm)
+    base = log_loss(y_te, p_ens)
     imp = {}
     Xp = X_te.reset_index(drop=True)
     for f in feats:
-        deltas = []
-        for _ in range(5):
+        deltas_f = []
+        for _ in range(3):
             Xs = Xp.copy()
             Xs[f] = rng.permutation(Xs[f].values)
-            deltas.append(log_loss(y_te, final.predict(Xs)) - base)
-        imp[f] = np.mean(deltas)
+            deltas_f.append(log_loss(y_te, predict_ensemble(Xs)) - base)
+        imp[f] = np.mean(deltas_f)
     imp = pd.Series(imp).sort_values(ascending=False)
 
     # ---------- 6. plots ----------
@@ -246,7 +298,7 @@ def main():
     fig, ax = plt.subplots(figsize=(6.4, 5.6), dpi=150, facecolor="#fcfcfb")
     style_ax(ax)
     ax.plot([0, 1], [0, 1], color=C_MUTED, linewidth=1, linestyle="--", zorder=1)
-    for p, label, color in [(p_gbm_o, "Model (LightGBM)", C_MODEL),
+    for p, label, color in [(p_ens_o, "Model (stacked ensemble)", C_MODEL),
                             (p_mkt, "Market (no-vig)", C_MARKET)]:
         order = np.argsort(p)
         ps, ys = np.asarray(p)[order], np.asarray(yo)[order]
@@ -268,7 +320,7 @@ def main():
     style_ax(ax)
     ax.barh(top.index, top.values, color=C_MODEL, height=0.62)
     ax.set_xlabel("Log-loss increase when permuted", color=C_INK2, fontsize=10)
-    ax.set_title("Permutation importance — top 15 features (test set)",
+    ax.set_title("Permutation importance — top 15 features (ensemble, test set)",
                  color=C_INK, fontsize=11, loc="left")
     ax.grid(axis="y", visible=False)
     fig.tight_layout()
@@ -283,7 +335,7 @@ def main():
             f"| {r['brier']:.3f} | {r['ece']:.3f} |" + (f" {r['note']}" if r["note"] else "")
             for r in rows)
 
-    mkt_ll = rows_mkt[0]["logloss"]; mdl_ll = rows_mkt[1]["logloss"]; bl_ll = rows_mkt[3]["logloss"]
+    mkt_ll = rows_mkt[0]["logloss"]; mdl_ll = rows_mkt[1]["logloss"]; bl_ll = rows_mkt[2]["logloss"]
     beats = mdl_ll < mkt_ll
     adds = bl_ll < mkt_ll - 1e-4 and ci_lo > 0
     report = f"""# UFC Fight Prediction — Calibration Report
@@ -291,12 +343,18 @@ def main():
 Generated by `train_report.py`. Seeds fixed (42); strict temporal validation.
 
 **Data:** {len(df)} UFC fights {df['date'].min().date()} to {df['date'].max().date()},
-features computed strictly as-of fight date by replaying career histories
-(`build_features.py`). **Split:** train ≤ {CUTOFF.date()} ({len(train_all)} fights),
-test after ({len(test)} fights). LightGBM tuned with 4-fold expanding-window CV
-inside the train period (best: num_leaves={best_cfg[0]}, lr={best_cfg[1]},
-min_child_samples={best_cfg[2]}, cv logloss {best_cv_loss:.4f}). Isotonic
-calibration and the market blend were fitted on out-of-fold CV predictions only.
+{len(feats)} features computed strictly as-of fight date by replaying career
+histories (`build_features.py`): records, Elo (finish-weighted), per-minute
+striking/grappling rates, strike-target and position mixes, recent-form windows
+(last 3 fights), opponent quality (average opponent Elo), trajectory (peak-Elo
+decline, layoffs, weight-class changes), rankings, and physical attributes.
+
+**Split:** train ≤ {CUTOFF.date()} ({len(train_all)} fights), test after
+({len(test)} fights). LightGBM (best {best_lgb}, cv {cv_lgb:.4f}) and XGBoost
+(best {best_xgb}, cv {cv_xgb:.4f}) tuned with 4-fold expanding-window CV inside
+the train period. The stacking combiner, isotonic calibrator, and market blend
+were all fitted on out-of-fold CV predictions only. Stack weights
+(LGB, XGB, logistic): {np.round(stacker.coef_[0], 2).tolist()}.
 
 ## Model comparison — full test set ({len(test)} fights)
 
@@ -315,10 +373,6 @@ market alone. Paired bootstrap on the log-loss difference (market − blend,
 10,000 resamples): 95% CI [{ci_lo:+.4f}, {ci_hi:+.4f}], blend better in
 {p_better:.1%} of resamples.
 
-Isotonic calibration (fitted on out-of-fold predictions) improved ECE slightly
-but worsened log loss, so the raw LightGBM probabilities — already close to
-calibrated — are the primary model output.
-
 This is the expected result for public pre-fight data: closing odds aggregate
 sharp bettors' information (injuries, camp changes, weight-cut issues, insider
 knowledge) that no historical-stats model can see. Matching the market's
@@ -330,12 +384,15 @@ to beat closing lines would be the red flag.
 ![Reliability diagram](plots/reliability.png)
 
 ECE (10 equal-count bins): model {rows_mkt[1]['ece']:.3f}, market {rows_mkt[0]['ece']:.3f}.
+Isotonic calibration is reported for completeness; the raw ensemble is already
+close to calibrated.
 
 ## What carries signal
 
 ![Permutation importance](plots/importance.png)
 
-Top 10 by permutation importance (mean log-loss increase over 5 shuffles):
+Top 10 by permutation importance (mean log-loss increase over 3 shuffles,
+through the full ensemble):
 
 {chr(10).join(f"- `{k}`: {v:+.4f}" for k, v in imp.head(10).items())}
 
@@ -346,6 +403,8 @@ Top 10 by permutation importance (mean log-loss increase over 5 shuffles):
 - Elo starts at 1500 on UFC debut; pre-UFC records are not observed.
 - Odds are closing odds from the Ultimate UFC Dataset ({len(ot)}/{len(test)}
   test fights matched); fights without odds are excluded only from market rows.
+- Rankings exist only for ranked fighters from 2021 onward; missing values are
+  left as NaN for the tree models.
 - Fight time is approximated with 5-minute rounds (exact for the modern era).
 """
     (ROOT / "report.md").write_text(report, encoding="utf-8")
