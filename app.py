@@ -248,17 +248,57 @@ with tab_parlay:
                 st.caption(note)
 
         if target > 0:
-            TH_G = dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60)
-            gc = build_cands(TH_G)
+            # Goal mode sees EVERY variant of every fight (moneyline, method,
+            # double chance, both distance sides) and lets the probability-cost
+            # ratio choose — one leg per fight.
+            gc = []
+            for _, r in df.iterrows():
+                pick_a = r["p_a"] >= 0.5
+                p_win = r["p_a"] if pick_a else 1 - r["p_a"]
+                side = r["fighter_a"] if pick_a else r["fighter_b"]
+                fight = f"{r['fighter_a']} vs {r['fighter_b']}"
+                pre = "a" if pick_a else "b"
+                raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
+                       "Dec": r[f"p_{pre}_dec"]}
+                sc = p_win / sum(raw.values())
+                meth = sorted(((k, v * sc) for k, v in raw.items()),
+                              key=lambda kv: kv[1], reverse=True)
+                p_dist = r["p_a_dec"] + r["p_b_dec"]
+                o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
+                why = str(r.get("why", "")) if "why" in df.columns else ""
+                if pd.notna(o) and p_win >= 0.55:
+                    gc.append((p_win, side, "moneyline", american_to_dec(o),
+                               f"FanDuel {o:+.0f}", f"edge: {why}", fight))
+                if meth[0][1] >= 0.35:
+                    p_leg = meth[0][1]
+                    gc.append((p_leg, f"{side} by {meth[0][0]}", "method",
+                               est_prop_dec(p_leg),
+                               f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                               f"{meth[0][1]/p_win:.0%} of his win paths — edge: {why}", fight))
+                p_dc = meth[0][1] + meth[1][1]
+                if p_dc >= 0.50:
+                    gc.append((p_dc, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
+                               est_prop_dec(p_dc),
+                               f"fair {fair_american(p_dc):+.0f} (price on FanDuel)",
+                               f"two live paths cover {p_dc/p_win:.0%} of his wins — edge: {why}", fight))
+                for p_leg, lbl in [(p_dist, "Goes the distance: " + fight),
+                                   (1 - p_dist, "Doesn't go the distance: " + fight)]:
+                    if p_leg >= 0.55:
+                        gc.append((p_leg, lbl, "fight-level", est_prop_dec(p_leg),
+                                   f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
+                                   "betting the fight's shape, not a side", fight))
             required = (stake + target) / stake
             gc.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
-            chosen, est_prod, p_hit = [], 1.0, 1.0
+            chosen, est_prod, p_hit, used_f = [], 1.0, 1.0, set()
             for c_leg in gc:
                 if est_prod >= required or len(chosen) >= 6:
                     break
+                if c_leg[6] in used_f:
+                    continue
                 chosen.append(c_leg)
                 p_hit *= c_leg[0]
                 est_prod *= c_leg[3]
+                used_f.add(c_leg[6])
             note = (f"Turning ${stake:.0f} into ${stake + target:.0f} needs about "
                     f"{dec_to_american(required):+.0f}; the cheapest route hits "
                     f"{p_hit:.0%} of the time. The target sets the risk — the honest "
