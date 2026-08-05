@@ -30,7 +30,6 @@ import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 
 ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
-ESPN_CACHE = DATA / "upcoming_espn.json"
 CACHE_TTL_S = 6 * 3600
 BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
 
@@ -39,14 +38,17 @@ WC_LBS = {"Strawweight": 115, "Flyweight": 125, "Bantamweight": 135,
           "Middleweight": 185, "Light Heavyweight": 205, "Heavyweight": 250}
 
 
-def fetch_card(refresh):
-    fresh = ESPN_CACHE.exists() and time.time() - ESPN_CACHE.stat().st_mtime < CACHE_TTL_S
+def fetch_card(refresh, date=None):
+    """Next upcoming card, or the card on a specific YYYYMMDD date."""
+    cache = DATA / f"upcoming_espn_{date or 'next'}.json"
+    url = ESPN_URL + (f"?dates={date}" if date else "")
+    fresh = cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL_S
     if refresh or not fresh:
-        print("Fetching upcoming card from ESPN...")
-        ESPN_CACHE.write_bytes(urllib.request.urlopen(ESPN_URL, timeout=60).read())
-    events = json.loads(ESPN_CACHE.read_text(encoding="utf-8")).get("events", [])
+        print("Fetching card from ESPN...")
+        cache.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+    events = json.loads(cache.read_text(encoding="utf-8")).get("events", [])
     if not events:
-        sys.exit("No upcoming UFC events found.")
+        sys.exit(f"No UFC event found{' on ' + date if date else ''}.")
     return events[0]
 
 
@@ -119,8 +121,9 @@ def train_stack(df, feats):
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     refresh = "--refresh" in sys.argv
+    date = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--date=")), None)
     ensure_data(refresh)
-    event = fetch_card(refresh)
+    event = fetch_card(refresh, date)
 
     print("Replaying fight history...")
     rng = np.random.default_rng(SEED)
