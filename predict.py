@@ -165,7 +165,11 @@ def bout_features(name1, name2, order1_first, weight, women, periods, title,
                                  - sb["kd_taken_p15"] * sa["kd_p15"])
     row["grapple_threat_diff"] = (sa["td_avg"] * (1 - sb["td_def"])
                                   - sb["td_avg"] * (1 - sa["td_def"]))
-    return row, s1["n"], s2["n"]
+
+    def rec(s):
+        base = f"{s['wins']}-{s['losses']}"
+        return base + (f"-{s['draws']}" if s["draws"] else "")
+    return row, (s1["n"], rec(s1)), (s2["n"], rec(s2))
 
 
 def train_stack(df, feats):
@@ -231,9 +235,9 @@ def main():
         weight, women = parse_weight(abbrev)
         periods = c.get("format", {}).get("regulation", {}).get("periods", 3)
         title = int("Title" in abbrev or "title" in str(c.get("notes", "")))
-        row, nf1, nf2 = bout_features(n1, n2, True, weight, women, periods, title,
-                                      states, div_stats, phys)
-        brows.append((n1, n2, abbrev, row, nf1, nf2))
+        row, (nf1, rec1), (nf2, rec2) = bout_features(
+            n1, n2, True, weight, women, periods, title, states, div_stats, phys)
+        brows.append((n1, n2, abbrev, row, nf1, nf2, rec1, rec2))
 
     X = pd.DataFrame([b[3] for b in brows])
     for f in SNAP_FEATS:
@@ -245,7 +249,7 @@ def main():
     book = fetch_fanduel(refresh)
 
     saved, edges = [], []
-    for (n1, n2, abbrev, _, nf1, nf2), p, p6, td, cb in zip(brows, probs, P6, exp_td, contribs):
+    for (n1, n2, abbrev, _, nf1, nf2, rec1, rec2), p, p6, td, cb in zip(brows, probs, P6, exp_td, contribs):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
         side = p6[:3] if p >= 0.5 else p6[3:]
@@ -265,6 +269,7 @@ def main():
                       "p_a_dec": round(float(p6[2]), 4), "p_b_ko": round(float(p6[3]), 4),
                       "p_b_sub": round(float(p6[4]), 4), "p_b_dec": round(float(p6[5]), 4),
                       "exp_td": round(float(td), 2),
+                      "rec_a": rec1, "rec_b": rec2,
                       "why": why_string(cb, feats, p >= 0.5)})
         if book and key in book:
             o1, o2 = book[key][norm_name(n1)], book[key][norm_name(n2)]

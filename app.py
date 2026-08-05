@@ -87,36 +87,50 @@ def fetch_results(card_date):
 # ------------------------------- Picks ---------------------------------------
 with tab_picks:
     st.subheader(f"Card: {card}")
-    rows = []
-    for _, r in df.iterrows():
+    st.write("")
+    for i, r in df.iloc[::-1].iterrows():  # main event first
         pick_a = r["p_a"] >= 0.5
         p = r["p_a"] if pick_a else 1 - r["p_a"]
         pre = "a" if pick_a else "b"
         raw = [r[f"p_{pre}_ko"], r[f"p_{pre}_sub"], r[f"p_{pre}_dec"]]
         ko, sub, dec = [x * p / sum(raw) for x in raw]
-        fd = ""
-        if pd.notna(r.get("fanduel_a")):
-            fd = f"{r['fanduel_a']:+.0f} / {r['fanduel_b']:+.0f}"
-        row_out = {
-            "Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
-            "Pick": r["fighter_a"] if pick_a else r["fighter_b"],
-            "Win %": p,
-            "KO/Sub/Dec": f"{ko:.0%} / {sub:.0%} / {dec:.0%}",
-            "Distance": r["p_a_dec"] + r["p_b_dec"],
-            "Exp. TD": r["exp_td"],
-            "FanDuel (A/B)": fd,
-        }
-        if "why" in df.columns:
-            row_out["Why"] = r.get("why", "")
-        rows.append(row_out)
-    st.dataframe(
-        pd.DataFrame(rows),
-        column_config={
-            "Win %": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-            "Distance": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-            "Exp. TD": st.column_config.NumberColumn(format="%.1f"),
-        },
-        hide_index=True, width="stretch")
+        dist = r["p_a_dec"] + r["p_b_dec"]
+        pick_name = r["fighter_a"] if pick_a else r["fighter_b"]
+
+        ca, cm, cb = st.columns([3, 4, 3])
+        with ca:
+            mark = " ✅" if pick_a else ""
+            st.markdown(f"### {r['fighter_a']}{mark}")
+            bits = []
+            if str(r.get("rec_a", "")) not in ("", "nan"):
+                bits.append(f"UFC record **{r['rec_a']}**")
+            if pd.notna(r.get("fanduel_a")):
+                bits.append(f"FanDuel {r['fanduel_a']:+.0f}")
+            st.markdown(" · ".join(bits) if bits else "&nbsp;")
+        with cb:
+            mark = "" if pick_a else " ✅"
+            st.markdown(f"### {r['fighter_b']}{mark}")
+            bits = []
+            if str(r.get("rec_b", "")) not in ("", "nan"):
+                bits.append(f"UFC record **{r['rec_b']}**")
+            if pd.notna(r.get("fanduel_b")):
+                bits.append(f"FanDuel {r['fanduel_b']:+.0f}")
+            st.markdown(" · ".join(bits) if bits else "&nbsp;")
+        with cm:
+            st.markdown(f"<div style='text-align:center'>"
+                        f"<span style='font-size:1.4em'>Pick: <b>{pick_name}</b> "
+                        f"<b>{p:.0%}</b></span></div>", unsafe_allow_html=True)
+            st.progress(min(max(p, 0.0), 1.0))
+            st.markdown(f"<div style='text-align:center;color:#898781'>"
+                        f"KO {ko:.0%} &nbsp;·&nbsp; Sub {sub:.0%} &nbsp;·&nbsp; "
+                        f"Dec {dec:.0%} &nbsp;&nbsp;|&nbsp;&nbsp; distance {dist:.0%}"
+                        f" &nbsp;&nbsp;|&nbsp;&nbsp; exp. takedowns {r['exp_td']:.1f}"
+                        f"</div>", unsafe_allow_html=True)
+            why = str(r.get("why", ""))
+            if why and why != "nan":
+                st.markdown(f"<div style='text-align:center;color:#898781'>"
+                            f"<i>edge: {why}</i></div>", unsafe_allow_html=True)
+        st.divider()
 
     edges = []
     for _, r in df[has_odds].iterrows():
