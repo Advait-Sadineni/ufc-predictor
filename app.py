@@ -165,11 +165,17 @@ with tab_parlay:
     legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
     legs.sort(key=lambda l: l["p"], reverse=True)
 
-    if st.toggle("✨ Suggested parlay — model picks the best bet type per leg"):
-        # Per fight, choose the most confident option that clears its floor:
-        # single method >= 42%, double chance >= 60%, moneyline >= 62%,
-        # fight-level distance/finish >= 62% (no fighter side taken at all).
-        options = []
+    if st.toggle("✨ Suggested parlay — model builds the ticket for your risk level"):
+        profile = st.select_slider(
+            "Risk level (target chance the whole ticket hits)",
+            ["Safe (~35%)", "Balanced (~25%)", "Aggressive (~15%)"],
+            value="Balanced (~25%)")
+        floor = {"S": 0.35, "B": 0.25, "A": 0.15}[profile[0]]
+        PROP_HAIRCUT = 0.85  # assume FanDuel pays ~15% under fair on unpriced legs
+
+        # Every leg option for every fight; score = p x payout multiple, i.e. the
+        # leg's multiplicative EV contribution (1.0 = neutral, >1 = accretive).
+        cands = []
         for _, r in df.iterrows():
             pick_a = r["p_a"] >= 0.5
             p_win = r["p_a"] if pick_a else 1 - r["p_a"]
@@ -183,53 +189,51 @@ with tab_parlay:
                           key=lambda kv: kv[1], reverse=True)
             p_dist = r["p_a_dec"] + r["p_b_dec"]
             o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
-            cands = []
-            if meth[0][1] >= 0.42:
-                cands.append((meth[0][1], f"{side} by {meth[0][0]}", "method", np.nan))
-            if meth[0][1] + meth[1][1] >= 0.60:
-                cands.append((meth[0][1] + meth[1][1],
-                              f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance", np.nan))
-            if p_win >= 0.62:
-                cands.append((p_win, side, "moneyline", o))
-            if p_dist >= 0.62:
-                cands.append((p_dist, f"Goes the distance: {fight}", "fight-level", np.nan))
-            if 1 - p_dist >= 0.62:
-                cands.append((1 - p_dist, f"Doesn't go the distance: {fight}", "fight-level", np.nan))
-            if cands:
-                options.append(max(cands))
-        options.sort(reverse=True)
-        chosen = options[:n_legs]
+            opts = []
+            if pd.notna(o):  # moneyline at FanDuel's real price -> true EV known
+                opts.append((p_win, side, "moneyline", american_to_dec(o), f"FanDuel {o:+.0f}"))
+            for p_leg, label, kind in [
+                (meth[0][1], f"{side} by {meth[0][0]}", "method"),
+                (meth[0][1] + meth[1][1], f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance"),
+                (p_dist, f"Goes the distance: {fight}", "fight-level"),
+                (1 - p_dist, f"Doesn't go the distance: {fight}", "fight-level"),
+            ]:
+                if p_leg >= 0.40:
+                    opts.append((p_leg, label, kind, (1 / p_leg) * PROP_HAIRCUT,
+                                 f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"))
+            if opts:  # best option per fight by EV contribution (p x dec)
+                cands.append(max(opts, key=lambda t: t[0] * t[3]))
+        # Greedy: highest EV-contribution legs first, while staying above the floor.
+        cands.sort(key=lambda t: t[0] * t[3], reverse=True)
+        chosen, p_hit = [], 1.0
+        for c_leg in cands:
+            if len(chosen) >= 6:
+                break
+            if p_hit * c_leg[0] >= floor or len(chosen) < 2:
+                chosen.append(c_leg)
+                p_hit *= c_leg[0]
         if len(chosen) < 2:
-            st.info("Not enough confident legs on this card for a suggested ticket.")
+            st.info("Not enough eligible legs on this card.")
         else:
-            p_hit, dec_known, fair_unpriced, rows_s = 1.0, 1.0, 1.0, []
-            for p_leg, label, kind, o in chosen:
-                p_hit *= p_leg
-                if kind == "moneyline" and pd.notna(o):
-                    dec_known *= american_to_dec(o)
-                    price = f"FanDuel {o:+.0f}"
-                else:
-                    fair_unpriced /= p_leg
-                    price = f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"
-                rows_s.append({"Leg": label, "Type": kind, "Model": p_leg, "Price": price})
+            est_dec = float(np.prod([c[3] for c in chosen]))
+            rows_s = [{"Leg": c[1], "Type": c[2], "Model": c[0],
+                       "EV score": round(c[0] * c[3], 2), "Price": c[4]} for c in chosen]
             st.dataframe(pd.DataFrame(rows_s),
                          column_config={"Model": st.column_config.NumberColumn(format="percent")},
                          hide_index=True, width="stretch")
             a, b, c = st.columns(3)
             a.metric("Model P(all hit)", f"{p_hit:.1%}")
-            fair_dec = dec_known * fair_unpriced
-            if fair_unpriced == 1.0:
-                b.metric("FanDuel pays", f"{dec_to_american(fair_dec):+.0f}")
-                c.metric(f"Payout on ${stake:.0f}", f"${stake * fair_dec:,.2f}")
-            else:
-                b.metric("Fair combined", f"{dec_to_american(fair_dec):+.0f}")
-                c.metric("Only take above",
-                         f"{dec_to_american(dec_known * fair_unpriced / 0.8):+.0f}")
-            st.caption("Legs chosen for confidence, not payout — method when the "
-                       "finish is predictable, moneyline when only the winner is, "
-                       "and fight-level (distance/finish) when the model trusts the "
-                       "fight's shape more than either fighter. Same rule as always: "
-                       "only take it if FanDuel pays above the threshold.")
+            b.metric("Est. payout", f"{dec_to_american(est_dec):+.0f}",
+                     help="Moneyline legs at FanDuel's real price; unpriced legs "
+                          "assume FanDuel pays 15% under fair. Their quote decides.")
+            c.metric(f"Est. ${stake:.0f} returns", f"${stake * est_dec:,.2f}")
+            st.caption("Built to maximize payout at your chosen risk level, not to "
+                       "minimize risk: legs are ranked by EV score (probability x "
+                       "payout multiple — above 1.00 means the price beats the "
+                       "model's probability) and added until the ticket reaches the "
+                       "target hit chance. Fewer, chunkier legs beat many small ones "
+                       "at the same risk — every extra leg compounds FanDuel's vig. "
+                       "If their quoted payout is below the estimate, pass.")
         st.divider()
 
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
