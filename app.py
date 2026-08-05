@@ -228,6 +228,41 @@ with tab_parlay:
                        "only take it if FanDuel pays above the threshold.")
         st.divider()
 
+    with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
+        fight_names = [f"{r['fighter_a']} vs {r['fighter_b']}" for _, r in df.iterrows()]
+        sel = st.selectbox("Fight", fight_names, index=len(fight_names) - 1)
+        r = df.iloc[fight_names.index(sel)]
+        p6 = np.array([r["p_a_ko"], r["p_a_sub"], r["p_a_dec"],
+                       r["p_b_ko"], r["p_b_sub"], r["p_b_dec"]], dtype=float)
+        p6 = p6 / p6.sum()
+        s1, s2 = st.columns(2)
+        winner = s1.selectbox("Winner", ["Either", r["fighter_a"], r["fighter_b"]])
+        ending = s2.selectbox("How it ends", ["Any", "Inside the distance",
+                                              "Goes the distance", "KO/TKO",
+                                              "Submission", "Decision"])
+        w_mask = {"Either": {0, 1, 2, 3, 4, 5}, r["fighter_a"]: {0, 1, 2},
+                  r["fighter_b"]: {3, 4, 5}}[winner]
+        e_mask = {"Any": {0, 1, 2, 3, 4, 5}, "Inside the distance": {0, 1, 3, 4},
+                  "Goes the distance": {2, 5}, "KO/TKO": {0, 3},
+                  "Submission": {1, 4}, "Decision": {2, 5}}[ending]
+        mask = list(w_mask & e_mask)
+        p_joint = float(p6[mask].sum())
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Exact joint probability", f"{p_joint:.1%}")
+        m2.metric("Fair odds", f"{fair_american(p_joint):+.0f}" if 0 < p_joint < 1 else "—")
+        if winner != "Either" and ending != "Any":
+            p_w = float(p6[list(w_mask)].sum())
+            p_e = float(p6[list(e_mask)].sum())
+            naive = p_w * p_e
+            m3.metric("Naive (wrong) product", f"{naive:.1%}",
+                      delta=f"{p_joint - naive:+.1%} correlation", delta_color="off")
+        st.caption("Joint probability read directly off the 6-way outcome model — "
+                   "no independence assumption. Within-fight legs are correlated, "
+                   "which is exactly why books discount SGP payouts; compare "
+                   "FanDuel's quoted price to the fair odds above (+25% cushion "
+                   "still applies). Probabilities come from the method model, which "
+                   "is weaker than the winner model — see the report.")
+
     if len(legs) < 2:
         st.info("Fewer than 2 eligible legs with odds on this card.")
     else:
