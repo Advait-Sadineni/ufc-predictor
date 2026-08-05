@@ -112,11 +112,9 @@ with tab_picks:
 
 # --------------------------- Parlay builder ----------------------------------
 with tab_parlay:
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     stake = c1.number_input("Stake ($)", 5.0, 1000.0, 25.0, 5.0)
-    n_legs = c2.slider("Legs", 2, 6, 3)
-    leg_type = c3.radio("Leg type", ["Moneyline", "Double chance (2 methods)",
-                                     "Single method"], horizontal=False)
+    n_legs = c2.slider("Candidate legs", 2, 6, 4)
 
     pool = []
     main_idx = len(df) - 1
@@ -141,35 +139,61 @@ with tab_parlay:
     if len(legs) < 2:
         st.info("Fewer than 2 eligible legs with odds on this card.")
     else:
-        out, p_hit, dec_odds, priced = [], 1.0, 1.0, True
-        for l in legs:
+        st.caption("Pick a type per leg — mix moneyline and method legs freely. "
+                   "'Skip' drops a leg from the ticket.")
+        out, p_hit, dec_known, fair_unpriced = [], 1.0, 1.0, 1.0
+        n_used = 0
+        for i, l in enumerate(legs):
             ranked = sorted(l["methods"].items(), key=lambda kv: kv[1], reverse=True)
-            if leg_type == "Moneyline":
+            lc1, lc2 = st.columns([2, 1])
+            lc1.markdown(f"**{l['side']}**  ({l['odds']:+.0f}, model {l['p']:.0%})"
+                         + ("  · main event" if l["main"] else ""))
+            choice = lc2.selectbox(
+                "Leg type", ["Moneyline", "Double chance", "Single method", "Skip"],
+                key=f"leg_{i}", label_visibility="collapsed")
+            if choice == "Skip":
+                continue
+            n_used += 1
+            if choice == "Moneyline":
                 label, p_leg = l["side"], l["p"]
-                dec_odds *= american_to_dec(l["odds"])
-            elif leg_type.startswith("Double"):
+                dec_known *= american_to_dec(l["odds"])
+                price = f"FanDuel {l['odds']:+.0f}"
+            elif choice == "Double chance":
                 label = f"{l['side']} by {ranked[0][0]} or {ranked[1][0]}"
-                p_leg, priced = ranked[0][1] + ranked[1][1], False
+                p_leg = ranked[0][1] + ranked[1][1]
+                fair_unpriced /= p_leg
+                price = f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"
             else:
                 label = f"{l['side']} by {ranked[0][0]}"
-                p_leg, priced = ranked[0][1], False
+                p_leg = ranked[0][1]
+                fair_unpriced /= p_leg
+                price = f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"
             p_hit *= p_leg
-            out.append({"Leg": label, "Model": p_leg, "Fair odds": f"{fair_american(p_leg):+.0f}"})
-        st.dataframe(pd.DataFrame(out),
-                     column_config={"Model": st.column_config.NumberColumn(format="percent")},
-                     hide_index=True, use_container_width=True)
-        a, b, c = st.columns(3)
-        a.metric("Model P(all hit)", f"{p_hit:.1%}")
-        if priced:
-            b.metric("FanDuel pays", f"{dec_to_american(dec_odds):+.0f}")
-            c.metric(f"Payout on ${stake:.0f}", f"${stake * dec_odds:,.2f}")
-            st.caption(f"Model EV ${stake * (p_hit * dec_odds - 1):+,.2f} — but parlays "
-                       "compound the vig; at market probabilities every ticket is negative.")
+            out.append({"Leg": label, "Model": p_leg, "Price": price})
+        if n_used < 2:
+            st.info("Keep at least 2 legs on the ticket.")
         else:
-            b.metric("Fair combined", f"{fair_american(p_hit):+.0f}")
-            c.metric("Only take above", f"{fair_american(p_hit * 0.8):+.0f}")
-            st.caption("Method odds aren't in the API — build this on FanDuel and only "
-                       "take it if they pay MORE than the threshold (fair + 25% cushion).")
+            st.dataframe(pd.DataFrame(out),
+                         column_config={"Model": st.column_config.NumberColumn(format="percent")},
+                         hide_index=True, use_container_width=True)
+            fully_priced = fair_unpriced == 1.0
+            a, b, c = st.columns(3)
+            a.metric("Model P(all hit)", f"{p_hit:.1%}")
+            if fully_priced:
+                b.metric("FanDuel pays", f"{dec_to_american(dec_known):+.0f}")
+                c.metric(f"Payout on ${stake:.0f}", f"${stake * dec_known:,.2f}")
+                st.caption(f"Model EV ${stake * (p_hit * dec_known - 1):+,.2f} — but "
+                           "parlays compound the vig; at market probabilities every "
+                           "ticket is negative.")
+            else:
+                fair_dec = dec_known * fair_unpriced
+                need_dec = dec_known * fair_unpriced / 0.8
+                b.metric("Fair combined", f"{dec_to_american(fair_dec):+.0f}")
+                c.metric("Only take above", f"{dec_to_american(need_dec):+.0f}")
+                st.caption("Ticket includes method legs FanDuel doesn't price via the "
+                           "API — build it in the app and only take it if the quoted "
+                           "payout beats the threshold (fair + 25% cushion on the "
+                           "model-priced legs).")
 
 # ------------------------------ Bet log --------------------------------------
 with tab_log:
