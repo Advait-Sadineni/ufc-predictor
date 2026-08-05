@@ -209,6 +209,7 @@ def main():
     exp_td = predtd(X[feats])
     book = fetch_fanduel(refresh)
 
+    saved = []
     for (n1, n2, abbrev, _, nf1, nf2), p, p6, td in zip(brows, probs, P6, exp_td):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
@@ -221,8 +222,16 @@ def main():
         print(f"    -> {pick} {pp:.0%}  (KO {ko:.0%} | Sub {sub:.0%} | Dec {dec:.0%})"
               f"   distance {dist:.0%}   exp. takedowns {td:.1f}{flags}")
         key = frozenset((norm_name(n1), norm_name(n2)))
+        o1 = o2 = np.nan
+        saved.append({"card_date": date or "next", "fighter_a": n1, "fighter_b": n2,
+                      "p_a": round(float(p), 4),
+                      "p_a_ko": round(float(p6[0]), 4), "p_a_sub": round(float(p6[1]), 4),
+                      "p_a_dec": round(float(p6[2]), 4), "p_b_ko": round(float(p6[3]), 4),
+                      "p_b_sub": round(float(p6[4]), 4), "p_b_dec": round(float(p6[5]), 4),
+                      "exp_td": round(float(td), 2)})
         if book and key in book:
             o1, o2 = book[key][norm_name(n1)], book[key][norm_name(n2)]
+            saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2
             ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
             side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
             verdict = (f"model disagrees with FanDuel: {side_n} at {side_o:+.0f} would be "
@@ -231,6 +240,12 @@ def main():
                        "model and FanDuel roughly agree — the price is fair minus vig")
             print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   {verdict}")
     print("=" * 74)
+    preds_dir = Path(__file__).parent / "predictions"
+    preds_dir.mkdir(exist_ok=True)
+    stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
+    out = preds_dir / f"{event.get('date', '')[:10]}_{stamp}.csv"
+    pd.DataFrame(saved).to_csv(out, index=False)
+    print(f"Predictions saved on record: {out.name}")
     if not book:
         print("FanDuel lines: set ODDS_API_KEY (free key from the-odds-api.com) to")
         print("compare picks against FanDuel prices.")
