@@ -171,6 +171,12 @@ with tab_parlay:
             ["Safe (~35%)", "Balanced (~25%)", "Aggressive (~15%)"],
             value="Balanced (~25%)")
         floor = {"S": 0.35, "B": 0.25, "A": 0.15}[profile[0]]
+        # The dial also controls how spicy each leg's TYPE gets: Safe takes the
+        # conservative variant of a fight, Aggressive upgrades the same fight to
+        # its method play (lower probability, much bigger multiplier).
+        TH = {"S": dict(m_share=0.62, m_min=0.45, dc_share=0.88, shape=0.62),
+              "B": dict(m_share=0.55, m_min=0.42, dc_share=0.82, shape=0.60),
+              "A": dict(m_share=0.48, m_min=0.38, dc_share=0.78, shape=0.58)}[profile[0]]
         PROP_HAIRCUT = 0.85  # assume FanDuel pays ~15% under fair on unpriced legs
 
         # Every leg option for every fight; score = p x payout multiple, i.e. the
@@ -189,22 +195,42 @@ with tab_parlay:
                           key=lambda kv: kv[1], reverse=True)
             p_dist = r["p_a_dec"] + r["p_b_dec"]
             o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
-            opts = []
-            if pd.notna(o):  # moneyline at FanDuel's real price -> true EV known
-                opts.append((p_win, side, "moneyline", american_to_dec(o), f"FanDuel {o:+.0f}"))
-            for p_leg, label, kind in [
-                (meth[0][1], f"{side} by {meth[0][0]}", "method"),
-                (meth[0][1] + meth[1][1], f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance"),
-                (p_dist, f"Goes the distance: {fight}", "fight-level"),
-                (1 - p_dist, f"Doesn't go the distance: {fight}", "fight-level"),
-            ]:
-                if p_leg >= 0.40:
-                    opts.append((p_leg, label, kind, (1 / p_leg) * PROP_HAIRCUT,
-                                 f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"))
-            if opts:  # best option per fight by EV contribution (p x dec)
-                cands.append(max(opts, key=lambda t: t[0] * t[3]))
-        # Greedy: highest EV-contribution legs first, while staying above the floor.
-        cands.sort(key=lambda t: t[0] * t[3], reverse=True)
+            # Per-fight type decision, driven by confidence structure:
+            #   confident winner + clear method   -> method leg (payout boost)
+            #   confident winner + two live paths -> double chance
+            #   confident winner + murky method   -> moneyline
+            #   unsure winner + clear fight shape -> distance leg (no side taken)
+            # A moneyline whose real FanDuel price is clearly generous (+EV >=1.05)
+            # overrides the method upgrade — verifiable value beats structure.
+            leg = None
+            ml_dec = american_to_dec(o) if pd.notna(o) else np.nan
+            if p_win >= 0.62:
+                m1_share = meth[0][1] / p_win
+                if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
+                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}")
+                elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
+                    p_leg = meth[0][1]
+                    leg = (p_leg, f"{side} by {meth[0][0]}", "method",
+                           (1 / p_leg) * PROP_HAIRCUT,
+                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+                elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
+                    p_leg = meth[0][1] + meth[1][1]
+                    leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
+                           (1 / p_leg) * PROP_HAIRCUT,
+                           f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+                elif pd.notna(ml_dec):
+                    leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}")
+            elif max(p_dist, 1 - p_dist) >= TH["shape"]:
+                p_leg = max(p_dist, 1 - p_dist)
+                lbl = ("Goes the distance: " if p_dist >= 0.5 else
+                       "Doesn't go the distance: ") + fight
+                leg = (p_leg, lbl, "fight-level", (1 / p_leg) * PROP_HAIRCUT,
+                       f"fair {fair_american(p_leg):+.0f} (price on FanDuel)")
+            if leg:
+                cands.append(leg)
+        # Safe/Balanced fill by confidence (most likely legs first); Aggressive
+        # fills by payout multiplier (fewer, spicier legs for the same floor).
+        cands.sort(key=lambda t: t[0] if profile[0] != "A" else t[3], reverse=True)
         chosen, p_hit = [], 1.0
         for c_leg in cands:
             if len(chosen) >= 6:
