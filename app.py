@@ -56,7 +56,32 @@ st.sidebar.caption(
     "Model does **not** beat closing odds (see report.md). Probabilities are "
     "calibrated to ~±3%. Nothing here is betting advice.")
 
-tab_picks, tab_parlay, tab_log = st.tabs(["Picks", "Parlay builder", "Bet log"])
+tab_picks, tab_parlay, tab_results, tab_log, tab_model = st.tabs(
+    ["Picks", "Parlay builder", "Results", "Bet log", "Model report"])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_results(card_date):
+    """Completed-fight winners for a card date from ESPN. {frozenset: winner_name}"""
+    import json as _json
+    import urllib.request as _rq
+    from build_features import norm_name as _norm
+    url = ("https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
+           f"?dates={card_date.replace('-', '')}")
+    try:
+        data = _json.loads(_rq.urlopen(url, timeout=30).read())
+    except Exception:
+        return {}
+    winners = {}
+    for ev in data.get("events", []):
+        for c in ev.get("competitions", []):
+            comps = c.get("competitors", [])
+            if len(comps) != 2 or not any(x.get("winner") for x in comps):
+                continue
+            names = [x.get("athlete", {}).get("displayName", "") for x in comps]
+            w = next(x for x in comps if x.get("winner"))
+            winners[frozenset(_norm(n) for n in names)] = w.get("athlete", {}).get("displayName")
+    return winners
 
 # ------------------------------- Picks ---------------------------------------
 with tab_picks:
@@ -136,6 +161,73 @@ with tab_parlay:
     legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
     legs.sort(key=lambda l: l["p"], reverse=True)
 
+    if st.toggle("✨ Suggested parlay — model picks the best bet type per leg"):
+        # Per fight, choose the most confident option that clears its floor:
+        # single method >= 42%, double chance >= 60%, moneyline >= 62%,
+        # fight-level distance/finish >= 62% (no fighter side taken at all).
+        options = []
+        for _, r in df.iterrows():
+            pick_a = r["p_a"] >= 0.5
+            p_win = r["p_a"] if pick_a else 1 - r["p_a"]
+            side = r["fighter_a"] if pick_a else r["fighter_b"]
+            fight = f"{r['fighter_a']} vs {r['fighter_b']}"
+            pre = "a" if pick_a else "b"
+            raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"],
+                   "Dec": r[f"p_{pre}_dec"]}
+            sc = p_win / sum(raw.values())
+            meth = sorted(((k, v * sc) for k, v in raw.items()),
+                          key=lambda kv: kv[1], reverse=True)
+            p_dist = r["p_a_dec"] + r["p_b_dec"]
+            o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
+            cands = []
+            if meth[0][1] >= 0.42:
+                cands.append((meth[0][1], f"{side} by {meth[0][0]}", "method", np.nan))
+            if meth[0][1] + meth[1][1] >= 0.60:
+                cands.append((meth[0][1] + meth[1][1],
+                              f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance", np.nan))
+            if p_win >= 0.62:
+                cands.append((p_win, side, "moneyline", o))
+            if p_dist >= 0.62:
+                cands.append((p_dist, f"Goes the distance: {fight}", "fight-level", np.nan))
+            if 1 - p_dist >= 0.62:
+                cands.append((1 - p_dist, f"Doesn't go the distance: {fight}", "fight-level", np.nan))
+            if cands:
+                options.append(max(cands))
+        options.sort(reverse=True)
+        chosen = options[:n_legs]
+        if len(chosen) < 2:
+            st.info("Not enough confident legs on this card for a suggested ticket.")
+        else:
+            p_hit, dec_known, fair_unpriced, rows_s = 1.0, 1.0, 1.0, []
+            for p_leg, label, kind, o in chosen:
+                p_hit *= p_leg
+                if kind == "moneyline" and pd.notna(o):
+                    dec_known *= american_to_dec(o)
+                    price = f"FanDuel {o:+.0f}"
+                else:
+                    fair_unpriced /= p_leg
+                    price = f"fair {fair_american(p_leg):+.0f} (price on FanDuel)"
+                rows_s.append({"Leg": label, "Type": kind, "Model": p_leg, "Price": price})
+            st.dataframe(pd.DataFrame(rows_s),
+                         column_config={"Model": st.column_config.NumberColumn(format="percent")},
+                         hide_index=True, use_container_width=True)
+            a, b, c = st.columns(3)
+            a.metric("Model P(all hit)", f"{p_hit:.1%}")
+            fair_dec = dec_known * fair_unpriced
+            if fair_unpriced == 1.0:
+                b.metric("FanDuel pays", f"{dec_to_american(fair_dec):+.0f}")
+                c.metric(f"Payout on ${stake:.0f}", f"${stake * fair_dec:,.2f}")
+            else:
+                b.metric("Fair combined", f"{dec_to_american(fair_dec):+.0f}")
+                c.metric("Only take above",
+                         f"{dec_to_american(dec_known * fair_unpriced / 0.8):+.0f}")
+            st.caption("Legs chosen for confidence, not payout — method when the "
+                       "finish is predictable, moneyline when only the winner is, "
+                       "and fight-level (distance/finish) when the model trusts the "
+                       "fight's shape more than either fighter. Same rule as always: "
+                       "only take it if FanDuel pays above the threshold.")
+        st.divider()
+
     if len(legs) < 2:
         st.info("Fewer than 2 eligible legs with odds on this card.")
     else:
@@ -195,6 +287,53 @@ with tab_parlay:
                            "payout beats the threshold (fair + 25% cushion on the "
                            "model-priced legs).")
 
+# ------------------------------ Results --------------------------------------
+with tab_results:
+    from build_features import norm_name as _nn
+    today = str(pd.Timestamp.today().date())
+    past_cards = [c for c in cards if c != "next" and c < today]
+    if not past_cards:
+        st.info("No completed cards yet — grading appears here automatically "
+                "the day after each event.")
+    for pc in past_cards:
+        winners = fetch_results(pc)
+        snap = pd.read_csv(cards[pc])
+        graded, briers, mkt_briers, mkt_hits = [], [], [], []
+        for _, r in snap.iterrows():
+            key = frozenset((_nn(r["fighter_a"]), _nn(r["fighter_b"])))
+            if key not in winners:
+                continue
+            actual = winners[key]
+            a_won = _nn(actual) == _nn(r["fighter_a"])
+            pick_a = r["p_a"] >= 0.5
+            p_pick = r["p_a"] if pick_a else 1 - r["p_a"]
+            hit = pick_a == a_won
+            brier = (r["p_a"] - (1 if a_won else 0)) ** 2
+            briers.append(brier)
+            row = {"Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
+                   "Model pick": f"{r['fighter_a'] if pick_a else r['fighter_b']} ({p_pick:.0%})",
+                   "Winner": actual, "Hit": "✅" if hit else "❌",
+                   "Brier": round(brier, 3)}
+            if pd.notna(r.get("fanduel_a")):
+                p_mkt_a = no_vig_side(r["fanduel_a"], r["fanduel_b"])
+                mkt_briers.append((p_mkt_a - (1 if a_won else 0)) ** 2)
+                mkt_hits.append((p_mkt_a >= 0.5) == a_won)
+            graded.append(row)
+        if not graded:
+            st.info(f"{pc}: results not posted yet.")
+            continue
+        st.subheader(f"Card {pc} — graded")
+        st.dataframe(pd.DataFrame(graded), hide_index=True, use_container_width=True)
+        g1, g2, g3 = st.columns(3)
+        hits = sum(1 for g in graded if g["Hit"] == "✅")
+        g1.metric("Model record", f"{hits}/{len(graded)}")
+        g2.metric("Model Brier (lower = better)", f"{np.mean(briers):.3f}")
+        if mkt_briers:
+            g3.metric("FanDuel Brier (same fights)", f"{np.mean(mkt_briers):.3f}",
+                      delta=f"market {sum(mkt_hits)}/{len(mkt_hits)} picks", delta_color="off")
+        st.caption("One card proves nothing either way — the season-long Brier "
+                   "comparison is the scoreboard that matters.")
+
 # ------------------------------ Bet log --------------------------------------
 with tab_log:
     with st.form("add_bet"):
@@ -217,6 +356,21 @@ with tab_log:
             dfb.to_csv(BETS, index=False)
             st.rerun()
 
+# ---------------------------- Model report -----------------------------------
+with tab_model:
+    report_path = ROOT / "report.md"
+    if report_path.exists():
+        for plot in ("reliability.png", "importance.png"):
+            p = ROOT / "plots" / plot
+            if p.exists():
+                st.image(str(p))
+        st.markdown(report_path.read_text(encoding="utf-8")
+                    .replace("![Reliability diagram](plots/reliability.png)", "")
+                    .replace("![Permutation importance](plots/importance.png)", ""))
+    else:
+        st.info("report.md not found — run train_report.py.")
+
+with tab_log:
     dfb = load_bets()
     if len(dfb):
         settled = dfb[dfb["result"].isin(["W", "L", "P"])].copy()
