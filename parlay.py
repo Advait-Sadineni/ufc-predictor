@@ -12,7 +12,7 @@ hits, the market's no-vig probability, and the EV under each. Parlays multiply
 each leg's vig — the market-EV line shows exactly what that costs.
 
 Run predict.py first (it saves the snapshot this reads).
-Usage: python parlay.py [--legs=3] [--stake=10] [--date=YYYY-MM-DD]
+Usage: python parlay.py [--legs=3,4,6] [--stake=25] [--date=YYYY-MM-DD]
 """
 
 import sys
@@ -74,8 +74,8 @@ def ticket_report(name, legs, stake):
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     args = dict(a.split("=", 1) for a in sys.argv[1:] if "=" in a)
-    n_legs = int(args.get("--legs", 3))
-    stake = float(args.get("--stake", 10))
+    leg_sizes = [int(x) for x in str(args.get("--legs", "3,4,6")).split(",")]
+    stake = float(args.get("--stake", 25))
     df = load_snapshot(args.get("--date"))
 
     pool = []
@@ -103,35 +103,39 @@ def main():
     if dropped:
         print("Excluded coin flips (model < 58%, non-main-event): "
               + ", ".join(f"{l['side']} ({l['p_model']:.0%})" for l in dropped))
-    legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
-    legs.sort(key=lambda l: l["p_model"], reverse=True)
-    if len(legs) < 2:
-        sys.exit("Fewer than 2 eligible legs — no parlay today is the right parlay.")
 
-    dec, payout = ticket_report("PRIMARY PARLAY", legs, stake)
+    for n_legs in leg_sizes:
+        legs = sorted(eligible, key=lambda l: l["ev"], reverse=True)[:n_legs]
+        legs.sort(key=lambda l: l["p_model"], reverse=True)
+        if len(legs) < 2:
+            print(f"\n[{n_legs} legs] fewer than 2 eligible legs — no ticket.")
+            continue
+        if len(legs) < n_legs:
+            print(f"\n[{n_legs} legs] only {len(legs)} eligible legs on this card "
+                  f"— building a {len(legs)}-legger instead.")
+        print("\n" + "#" * 74)
+        dec, payout = ticket_report(f"PRIMARY PARLAY — {len(legs)} legs", legs, stake)
 
-    # hedge ticket: flip the least-confident leg
-    flip = min(legs, key=lambda l: l["p_model"])
-    hedge_legs = [dict(l) for l in legs]
-    for l in hedge_legs:
-        if l["side"] == flip["side"]:
-            l["side"], l["other"] = l["other"], l["side"]
-            l["odds"], l["odds_other"] = l["odds_other"], l["odds"]
-            l["p_model"] = 1 - l["p_model"]
-            l["p_market"], l["p_market_other"] = l["p_market_other"], l["p_market"]
-    ticket_report(f"HEDGE PARLAY (flips {flip['side']} -> {flip['other']})",
-                  hedge_legs, stake)
-    print(f"\n  Between the two tickets, the {flip['side']} vs {flip['other']} fight")
-    print("  can't kill both — the other legs still have to hit on either ticket.")
+        # hedge ticket: flip the least-confident leg
+        flip = min(legs, key=lambda l: l["p_model"])
+        hedge_legs = [dict(l) for l in legs]
+        for l in hedge_legs:
+            if l["side"] == flip["side"]:
+                l["side"], l["other"] = l["other"], l["side"]
+                l["odds"], l["odds_other"] = l["odds_other"], l["odds"]
+                l["p_model"] = 1 - l["p_model"]
+                l["p_market"], l["p_market_other"] = l["p_market_other"], l["p_market"]
+        ticket_report(f"HEDGE PARLAY (flips {flip['side']} -> {flip['other']})",
+                      hedge_legs, stake)
+        print(f"  The {flip['side']} vs {flip['other']} fight can't kill both tickets.")
 
-    # live hedge on the final leg of the primary
-    last = legs[-1]
-    d_h = american_to_dec(last["odds_other"])
-    h = payout / d_h
-    locked = payout - h - stake  # both outcomes pay `locked` net of both stakes
-    print(f"\nLIVE HEDGE (if every primary leg except {last['side']} has already hit):")
-    print(f"  Bet ${h:.2f} on {last['other']} at {last['odds_other']:+.0f} before that fight.")
-    print(f"  Either outcome then locks ${locked:+.2f} profit on ${stake:.0f} + ${h:.2f} total risk.")
+        # live hedge on the final leg of the primary
+        last = legs[-1]
+        d_h = american_to_dec(last["odds_other"])
+        h = payout / d_h
+        locked = payout - h - stake  # both outcomes pay `locked` net of both stakes
+        print(f"  LIVE HEDGE: if every leg except {last['side']} has hit, "
+              f"${h:.2f} on {last['other']} at {last['odds_other']:+.0f} locks ${locked:+.2f}.")
 
     print("\nReality check: the market-EV lines above are what these tickets cost in")
     print("expectation. Parlays compound the vig on every leg — they are the most")
