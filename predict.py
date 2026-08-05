@@ -39,6 +39,40 @@ WC_LBS = {"Strawweight": 115, "Flyweight": 125, "Bantamweight": 135,
           "Featherweight": 145, "Lightweight": 155, "Welterweight": 170,
           "Middleweight": 185, "Light Heavyweight": 205, "Heavyweight": 250}
 
+# plain-English labels for the "why" column (top LightGBM contributions)
+WHY_LABELS = {
+    "age_diff": "age", "elo_diff": "Elo", "peak_elo_diff": "peak Elo",
+    "elo_decline_diff": "career decline", "red_corner": "corner",
+    "n_fights_diff": "experience", "win_pct_diff": "record",
+    "form_win_diff": "recent form", "form_sapm_diff": "recent damage taken",
+    "sapm_diff": "damage absorbed", "slpm_diff": "striking volume",
+    "str_def_diff": "striking defense", "str_acc_diff": "striking accuracy",
+    "td_avg_diff": "takedowns", "td_def_diff": "TD defense",
+    "kd_p15_diff": "knockdown power", "kd_taken_p15_diff": "chin",
+    "reach_diff": "reach", "height_diff": "height", "layoff_days_diff": "layoff",
+    "win_streak_diff": "win streak", "avg_opp_elo_diff": "opposition quality",
+    "form_opp_elo_diff": "recent opposition", "finish_rate_diff": "finishing rate",
+    "sub_att_p15_diff": "sub threat", "ctrl_min_share_diff": "cage control",
+    "rank_adv": "ranking", "southpaw_vs_orthodox": "stance matchup",
+}
+
+
+def why_string(contribs, feats, pick_a, top=3):
+    """Top features pushing toward the PICKED side, as plain English."""
+    order = np.argsort(contribs if not pick_a else -contribs)
+    out = []
+    for i in order:
+        c = contribs[i]
+        if (c > 0) != pick_a and c != 0:
+            continue  # feature argues for the other side
+        name = feats[i]
+        label = WHY_LABELS.get(name, name.replace("_diff", "").replace("_mean", " (both)").replace("_", " "))
+        if label not in out:
+            out.append(label)
+        if len(out) == top:
+            break
+    return ", ".join(out)
+
 
 def fetch_card(refresh, date=None):
     """Next upcoming card, or the card on a specific YYYYMMDD date."""
@@ -157,7 +191,7 @@ def train_stack(df, feats):
         return stacker.predict_proba(np.column_stack([
             logit(f_lgb.predict(X)), logit(f_xgb.predict(xgb.DMatrix(X))),
             logit(f_log.predict_proba(X)[:, 1])]))[:, 1]
-    return predict
+    return predict, f_lgb
 
 
 def main():
@@ -179,7 +213,7 @@ def main():
     feats = ANTISYM + [f"{f}_mean" for f in SNAP_FEATS] + CONTEXT
 
     print(f"Training on {len(df)} completed fights through {df['date'].max().date()}...")
-    predict = train_stack(df, feats)
+    predict, f_lgb = train_stack(df, feats)
     from props import fit_props
     pred6, predtd = fit_props(df, feats)
 
@@ -207,10 +241,11 @@ def main():
     probs = predict(X[feats])
     P6 = pred6(X[feats])
     exp_td = predtd(X[feats])
+    contribs = f_lgb.predict(X[feats], pred_contrib=True)[:, :-1]  # drop bias col
     book = fetch_fanduel(refresh)
 
     saved, edges = [], []
-    for (n1, n2, abbrev, _, nf1, nf2), p, p6, td in zip(brows, probs, P6, exp_td):
+    for (n1, n2, abbrev, _, nf1, nf2), p, p6, td, cb in zip(brows, probs, P6, exp_td, contribs):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
         side = p6[:3] if p >= 0.5 else p6[3:]
@@ -221,6 +256,7 @@ def main():
         print(f"{n1:24} vs {n2:24} {abbrev}")
         print(f"    -> {pick} {pp:.0%}  (KO {ko:.0%} | Sub {sub:.0%} | Dec {dec:.0%})"
               f"   distance {dist:.0%}   exp. takedowns {td:.1f}{flags}")
+        print(f"       why: {why_string(cb, feats, p >= 0.5)}")
         key = frozenset((norm_name(n1), norm_name(n2)))
         o1 = o2 = np.nan
         saved.append({"card_date": date or "next", "fighter_a": n1, "fighter_b": n2,
@@ -228,7 +264,8 @@ def main():
                       "p_a_ko": round(float(p6[0]), 4), "p_a_sub": round(float(p6[1]), 4),
                       "p_a_dec": round(float(p6[2]), 4), "p_b_ko": round(float(p6[3]), 4),
                       "p_b_sub": round(float(p6[4]), 4), "p_b_dec": round(float(p6[5]), 4),
-                      "exp_td": round(float(td), 2)})
+                      "exp_td": round(float(td), 2),
+                      "why": why_string(cb, feats, p >= 0.5)})
         if book and key in book:
             o1, o2 = book[key][norm_name(n1)], book[key][norm_name(n2)]
             saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2

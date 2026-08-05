@@ -51,6 +51,11 @@ def ensure_data(refresh=False):
                 break
             except Exception as e:
                 print(f"  mirror failed: {e}")
+# Two different UFC fighters share each of these normalized names; their merged
+# career stats are noise, so their fights are excluded from training rows
+# (their OPPONENTS' states still update normally).
+KNOWN_DUPES = {"brunosilva", "jeansilva", "joeygomez", "michaelmcdonald",
+               "mikedavis", "victorvalenzuela"}
 FORM_N = 3          # "recent form" window (fights)
 FINISH_K_MULT = 1.4  # Elo update boost for KO/sub wins
 
@@ -369,7 +374,10 @@ def replay(res, stats, phys, market, rng):
 
         # ---- pre-fight snapshot (this is all the model may see) ----
         if outcome != "D/D":
-            a_first = bool(rng.integers(2))  # seeded random orientation
+            # drawn for every decided fight (dupes included) so each fight's
+            # orientation is stable regardless of exclusions
+            a_first = bool(rng.integers(2))
+        if outcome != "D/D" and k1 not in KNOWN_DUPES and k2 not in KNOWN_DUPES:
             (ka, kb) = (k1, k2) if a_first else (k2, k1)
             (fa, fb) = (f1, f2) if a_first else (f2, f1)
             (ta, tb) = (traits_of_2, traits_of_1) if a_first else (traits_of_1, traits_of_2)

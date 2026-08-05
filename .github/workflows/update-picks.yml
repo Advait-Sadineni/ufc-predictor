@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: "0 16 * * 4"   # Thursday 16:00 UTC — lines are usually posted
     - cron: "0 15 * * 6"   # Saturday 15:00 UTC — fight-day refresh
+    - cron: "0 14 * * 0"   # Sunday 14:00 UTC — post-event retrain
   workflow_dispatch: {}
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   predict:
+    if: github.event.schedule != '0 14 * * 0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,4 +31,28 @@ jobs:
           git config user.email "actions@github.com"
           git add predictions/
           git diff --cached --quiet || git commit -m "Auto-update picks $(date -u +%F)"
+          git pull --rebase
+          git push
+
+  retrain:
+    if: github.event.schedule == '0 14 * * 0' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Refresh data and regenerate calibration report
+        run: |
+          python build_features.py --refresh
+          python train_report.py
+      - name: Commit report
+        run: |
+          git config user.name "picks-bot"
+          git config user.email "actions@github.com"
+          git add report.md plots/
+          git diff --cached --quiet || git commit -m "Auto-retrain report $(date -u +%F)"
+          git pull --rebase
           git push

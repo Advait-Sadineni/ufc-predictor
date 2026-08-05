@@ -14,7 +14,8 @@ import streamlit as st
 
 from parlay import (COIN_FLIP, american_to_dec, dec_to_american, fair_american,
                     implied, no_vig_side)
-from track_bets import BETS, implied as bet_implied, load as load_bets, profit
+from track_bets import (BETS, implied as bet_implied, load as load_bets, profit,
+                        snapshot_line)
 
 ROOT = Path(__file__).parent
 PREDS = ROOT / "predictions"
@@ -96,7 +97,7 @@ with tab_picks:
         fd = ""
         if pd.notna(r.get("fanduel_a")):
             fd = f"{r['fanduel_a']:+.0f} / {r['fanduel_b']:+.0f}"
-        rows.append({
+        row_out = {
             "Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
             "Pick": r["fighter_a"] if pick_a else r["fighter_b"],
             "Win %": p,
@@ -104,7 +105,10 @@ with tab_picks:
             "Distance": r["p_a_dec"] + r["p_b_dec"],
             "Exp. TD": r["exp_td"],
             "FanDuel (A/B)": fd,
-        })
+        }
+        if "why" in df.columns:
+            row_out["Why"] = r.get("why", "")
+        rows.append(row_out)
     st.dataframe(
         pd.DataFrame(rows),
         column_config={
@@ -112,7 +116,7 @@ with tab_picks:
             "Distance": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
             "Exp. TD": st.column_config.NumberColumn(format="%.1f"),
         },
-        hide_index=True, use_container_width=True)
+        hide_index=True, width="stretch")
 
     edges = []
     for _, r in df[has_odds].iterrows():
@@ -131,7 +135,7 @@ with tab_picks:
             pd.DataFrame(edges).sort_values("Gap", ascending=False),
             column_config={c: st.column_config.NumberColumn(format="percent")
                            for c in ("Model", "Market (no-vig)", "Gap")},
-            hide_index=True, use_container_width=True)
+            hide_index=True, width="stretch")
         st.caption("The market side of large gaps has historically been right more "
                    "often than the model side — treat these as questions, not answers.")
 
@@ -210,7 +214,7 @@ with tab_parlay:
                 rows_s.append({"Leg": label, "Type": kind, "Model": p_leg, "Price": price})
             st.dataframe(pd.DataFrame(rows_s),
                          column_config={"Model": st.column_config.NumberColumn(format="percent")},
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
             a, b, c = st.columns(3)
             a.metric("Model P(all hit)", f"{p_hit:.1%}")
             fair_dec = dec_known * fair_unpriced
@@ -302,7 +306,7 @@ with tab_parlay:
         else:
             st.dataframe(pd.DataFrame(out),
                          column_config={"Model": st.column_config.NumberColumn(format="percent")},
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
             fully_priced = fair_unpriced == 1.0
             a, b, c = st.columns(3)
             a.metric("Model P(all hit)", f"{p_hit:.1%}")
@@ -323,51 +327,72 @@ with tab_parlay:
                            "model-priced legs).")
 
 # ------------------------------ Results --------------------------------------
-with tab_results:
+def grade_card(snap, winners):
+    """Grade one snapshot against ESPN winners. Returns (rows, briers, mkt_briers, mkt_hits)."""
     from build_features import norm_name as _nn
+    graded, briers, mkt_briers, mkt_hits = [], [], [], []
+    for _, r in snap.iterrows():
+        key = frozenset((_nn(r["fighter_a"]), _nn(r["fighter_b"])))
+        if key not in winners:
+            continue
+        actual = winners[key]
+        a_won = _nn(actual) == _nn(r["fighter_a"])
+        pick_a = r["p_a"] >= 0.5
+        p_pick = r["p_a"] if pick_a else 1 - r["p_a"]
+        briers.append((r["p_a"] - (1 if a_won else 0)) ** 2)
+        if pd.notna(r.get("fanduel_a")):
+            p_mkt_a = no_vig_side(r["fanduel_a"], r["fanduel_b"])
+            mkt_briers.append((p_mkt_a - (1 if a_won else 0)) ** 2)
+            mkt_hits.append((p_mkt_a >= 0.5) == a_won)
+        graded.append({"Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
+                       "Model pick": f"{r['fighter_a'] if pick_a else r['fighter_b']} ({p_pick:.0%})",
+                       "Winner": actual, "Hit": "✅" if pick_a == a_won else "❌",
+                       "Brier": round(briers[-1], 3)})
+    return graded, briers, mkt_briers, mkt_hits
+
+
+with tab_results:
     today = str(pd.Timestamp.today().date())
-    past_cards = [c for c in cards if c != "next" and c < today]
+    past_cards = sorted([c for c in cards if c != "next" and c < today])
     if not past_cards:
         st.info("No completed cards yet — grading appears here automatically "
                 "the day after each event.")
+    season = {"hits": 0, "n": 0, "briers": [], "mkt_briers": [], "mkt_hits": 0, "mkt_n": 0}
     for pc in past_cards:
         winners = fetch_results(pc)
-        snap = pd.read_csv(cards[pc])
-        graded, briers, mkt_briers, mkt_hits = [], [], [], []
-        for _, r in snap.iterrows():
-            key = frozenset((_nn(r["fighter_a"]), _nn(r["fighter_b"])))
-            if key not in winners:
-                continue
-            actual = winners[key]
-            a_won = _nn(actual) == _nn(r["fighter_a"])
-            pick_a = r["p_a"] >= 0.5
-            p_pick = r["p_a"] if pick_a else 1 - r["p_a"]
-            hit = pick_a == a_won
-            brier = (r["p_a"] - (1 if a_won else 0)) ** 2
-            briers.append(brier)
-            row = {"Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
-                   "Model pick": f"{r['fighter_a'] if pick_a else r['fighter_b']} ({p_pick:.0%})",
-                   "Winner": actual, "Hit": "✅" if hit else "❌",
-                   "Brier": round(brier, 3)}
-            if pd.notna(r.get("fanduel_a")):
-                p_mkt_a = no_vig_side(r["fanduel_a"], r["fanduel_b"])
-                mkt_briers.append((p_mkt_a - (1 if a_won else 0)) ** 2)
-                mkt_hits.append((p_mkt_a >= 0.5) == a_won)
-            graded.append(row)
+        graded, briers, mkt_briers, mkt_hits = grade_card(pd.read_csv(cards[pc]), winners)
         if not graded:
             st.info(f"{pc}: results not posted yet.")
             continue
-        st.subheader(f"Card {pc} — graded")
-        st.dataframe(pd.DataFrame(graded), hide_index=True, use_container_width=True)
-        g1, g2, g3 = st.columns(3)
-        hits = sum(1 for g in graded if g["Hit"] == "✅")
-        g1.metric("Model record", f"{hits}/{len(graded)}")
-        g2.metric("Model Brier (lower = better)", f"{np.mean(briers):.3f}")
-        if mkt_briers:
-            g3.metric("FanDuel Brier (same fights)", f"{np.mean(mkt_briers):.3f}",
-                      delta=f"market {sum(mkt_hits)}/{len(mkt_hits)} picks", delta_color="off")
-        st.caption("One card proves nothing either way — the season-long Brier "
-                   "comparison is the scoreboard that matters.")
+        season["hits"] += sum(1 for g in graded if g["Hit"] == "✅")
+        season["n"] += len(graded)
+        season["briers"] += briers
+        season["mkt_briers"] += mkt_briers
+        season["mkt_hits"] += sum(mkt_hits)
+        season["mkt_n"] += len(mkt_hits)
+        with st.expander(f"Card {pc} — graded", expanded=(pc == past_cards[-1])):
+            st.dataframe(pd.DataFrame(graded), hide_index=True, width="stretch")
+            g1, g2, g3 = st.columns(3)
+            g1.metric("Model record", f"{sum(1 for g in graded if g['Hit'] == '✅')}/{len(graded)}")
+            g2.metric("Model Brier (lower = better)", f"{np.mean(briers):.3f}")
+            if mkt_briers:
+                g3.metric("FanDuel Brier (same fights)", f"{np.mean(mkt_briers):.3f}",
+                          delta=f"market {sum(mkt_hits)}/{len(mkt_hits)} picks", delta_color="off")
+    if season["n"]:
+        st.subheader("📊 Season scoreboard — every graded fight")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Model record", f"{season['hits']}/{season['n']}"
+                  f" ({season['hits']/season['n']:.0%})")
+        s2.metric("Model Brier", f"{np.mean(season['briers']):.3f}")
+        if season["mkt_n"]:
+            s3.metric("FanDuel record (same fights)",
+                      f"{season['mkt_hits']}/{season['mkt_n']}"
+                      f" ({season['mkt_hits']/season['mkt_n']:.0%})")
+            s4.metric("FanDuel Brier", f"{np.mean(season['mkt_briers']):.3f}")
+            lead = np.mean(season["mkt_briers"]) - np.mean(season["briers"])
+            st.caption(f"Brier difference (market − model): {lead:+.4f} — "
+                       f"{'model ahead' if lead > 0 else 'market ahead'} so far. "
+                       "One card proves nothing; this number matters after ~10 cards.")
 
 # ------------------------------ Bet log --------------------------------------
 with tab_log:
@@ -419,14 +444,20 @@ with tab_log:
             m1.metric("P/L", f"${pl:+,.2f}")
             m2.metric("ROI", f"{pl / staked:+.1%}" if staked else "—")
             m3.metric("Record", f"{wins}-{decd - wins}")
-            clv = settled.dropna(subset=["close"])
+            settled["ref_close"] = settled["close"]
+            fill_m = settled["ref_close"].isna()
+            settled.loc[fill_m, "ref_close"] = [snapshot_line(p)
+                                                for p in settled.loc[fill_m, "pick"]]
+            clv = settled.dropna(subset=["ref_close"])
             if len(clv):
                 edges_clv = [bet_implied(c) - bet_implied(o)
-                             for o, c in zip(clv["odds"], clv["close"])]
-                m4.metric("Avg CLV", f"{np.mean(edges_clv):+.1%}")
+                             for o, c in zip(clv["odds"], clv["ref_close"])]
+                m4.metric("Avg CLV", f"{np.mean(edges_clv):+.1%}",
+                          help="Closing-line value; blanks auto-filled from the "
+                               "last snapshot's FanDuel line (not a true close).")
             if decd < 20:
                 st.caption(f"{decd} settled bets — far too few to distinguish skill "
                            "from luck. Judge nothing before ~50.")
-        st.dataframe(dfb, hide_index=True, use_container_width=True)
+        st.dataframe(dfb, hide_index=True, width="stretch")
     else:
         st.caption("No bets logged yet.")

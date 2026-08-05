@@ -42,6 +42,27 @@ def implied(odds):
     return -odds / (-odds + 100) if odds < 0 else 100 / (odds + 100)
 
 
+def snapshot_line(pick_name):
+    """Reference line for a pick from the newest snapshot that priced them.
+
+    Not a true closing line — it's the Thursday/Saturday-morning FanDuel line
+    from the last prediction snapshot. Label accordingly wherever shown.
+    """
+    from build_features import norm_name
+    key = norm_name(pick_name)
+    preds = Path(__file__).parent / "predictions"
+    for f in sorted(preds.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+        df = pd.read_csv(f)
+        if "fanduel_a" not in df.columns:
+            continue
+        for _, r in df.iterrows():
+            if norm_name(r["fighter_a"]) == key and pd.notna(r["fanduel_a"]):
+                return float(r["fanduel_a"])
+            if norm_name(r["fighter_b"]) == key and pd.notna(r["fanduel_b"]):
+                return float(r["fanduel_b"])
+    return None
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -95,10 +116,15 @@ def main():
     if dec:
         avg_imp = np.mean([implied(o) for o in settled.loc[settled['result'] != 'P', 'odds']])
         print(f"Record: {wins}-{dec-wins}  ({wins/dec:.0%} vs {avg_imp:.0%} break-even at your avg odds)")
-    clv = settled.dropna(subset=["close"])
+    settled["ref_close"] = settled["close"]
+    fill = settled["ref_close"].isna()
+    settled.loc[fill, "ref_close"] = [snapshot_line(p) for p in settled.loc[fill, "pick"]]
+    n_filled = int(fill.sum() - settled.loc[fill, "ref_close"].isna().sum())
+    clv = settled.dropna(subset=["ref_close"])
     if len(clv):
-        edges = [implied(c) - implied(o) for o, c in zip(clv["odds"], clv["close"])]
-        print(f"CLV: {np.mean(edges):+.1%} avg ({len(clv)} bets with closing odds) — "
+        edges = [implied(c) - implied(o) for o, c in zip(clv["odds"], clv["ref_close"])]
+        note = f", {n_filled} auto-filled from last snapshot line" if n_filled else ""
+        print(f"CLV: {np.mean(edges):+.1%} avg ({len(clv)} bets{note}) — "
               f"{'you are beating the close (the good sign)' if np.mean(edges) > 0 else 'the close beats you (the market moved against your picks)'}")
     else:
         print("CLV: no closing odds recorded yet — add --close to future bets; it's the "

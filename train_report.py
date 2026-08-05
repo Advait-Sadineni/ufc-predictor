@@ -450,8 +450,12 @@ only the dense features (0.637) did not recover the incumbent either.
 
 ## Caveats
 
-- Fighters are keyed by normalized name; a handful of duplicate names
-  (e.g. two Bruno Silvas) introduce minor noise.
+- Fighters are keyed by normalized name; the six known duplicate names
+  (two fighters each, e.g. Bruno Silva) are excluded from training rows
+  entirely — their opponents' records still update normally.
+- The blend-beats-market significance is seed-sensitive: across different
+  random fighter-orientation draws it ranges roughly 95-99% of bootstrap
+  resamples. Treat it as a consistent but modest edge, not a precise number.
 - Elo starts at 1500 on UFC debut; pre-UFC records are not observed.
 - Odds are closing odds from the Ultimate UFC Dataset ({len(ot)}/{len(test)}
   test fights matched); fights without odds are excluded only from market rows.
