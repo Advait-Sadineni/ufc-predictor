@@ -42,11 +42,15 @@ card = st.sidebar.selectbox("Card", list(cards), format_func=lambda d: f"UFC car
 df = pd.read_csv(cards[card])
 has_odds = df["fanduel_a"].notna() if "fanduel_a" in df else pd.Series(False, index=df.index)
 
-if st.sidebar.button("Regenerate picks (2-3 min)"):
+is_local = (ROOT / "data" / "ufc-master.csv").exists()
+if is_local and st.sidebar.button("Regenerate picks (2-3 min)"):
     with st.spinner("Replaying history, training, fetching lines..."):
         arg = [] if card == "next" else [f"--date={card.replace('-', '')}"]
         subprocess.run([sys.executable, "predict.py", "--refresh", *arg], cwd=ROOT)
     st.rerun()
+if not is_local:
+    st.sidebar.caption("Cloud mode: picks auto-update via GitHub Actions "
+                       "(Thu + Sat mornings).")
 
 st.sidebar.caption(
     "Model does **not** beat closing odds (see report.md). Probabilities are "
