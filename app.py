@@ -26,7 +26,9 @@ BLUE, ORANGE, MUTED = "#2a78d6", "#eb6834", "#898781"
 
 
 def snapshots():
-    files = sorted(PREDS.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # sort by filename (card_YYYYMMDD_HHMM.csv) — mtime is useless on cloud,
+    # where a fresh clone stamps every file with the same time
+    files = sorted(PREDS.glob("*.csv"), key=lambda p: p.name, reverse=True)
     cards = {}
     for f in files:  # newest snapshot per card date
         card = f.name.split("_")[0]

@@ -51,7 +51,7 @@ def snapshot_line(pick_name):
     from build_features import norm_name
     key = norm_name(pick_name)
     preds = Path(__file__).parent / "predictions"
-    for f in sorted(preds.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for f in sorted(preds.glob("*.csv"), key=lambda p: p.name, reverse=True):
         df = pd.read_csv(f)
         if "fanduel_a" not in df.columns:
             continue
