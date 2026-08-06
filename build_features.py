@@ -161,8 +161,35 @@ def load_market():
     return market
 
 
+GLICKO_Q = 0.0057565  # ln(10)/400
+GLICKO_C2 = 2000.0    # RD^2 inflation per month idle (50->350 in ~5y)
+
+
+def _glicko_g(rd):
+    return 1.0 / np.sqrt(1 + 3 * GLICKO_Q**2 * rd**2 / np.pi**2)
+
+
+def glicko_rd_now(s, date):
+    """Pre-fight rating deviation, inflated by inactivity."""
+    if s["last_date"] is None:
+        return 350.0
+    months = (date - s["last_date"]).days / 30.0
+    return float(min(np.sqrt(s["g_rd"] ** 2 + GLICKO_C2 * months), 350.0))
+
+
+def glicko_update(r, rd, r_opp, rd_opp, score):
+    g = _glicko_g(rd_opp)
+    e = 1.0 / (1 + 10 ** (-g * (r - r_opp) / 400))
+    d2 = 1.0 / (GLICKO_Q**2 * g**2 * e * (1 - e))
+    denom = 1.0 / rd**2 + 1.0 / d2
+    r_new = r + GLICKO_Q / denom * g * (score - e)
+    rd_new = max(np.sqrt(1.0 / denom), 30.0)
+    return float(r_new), float(rd_new)
+
+
 def new_state():
     return {
+        "g_r": 1500.0, "g_rd": 350.0,
         "elo": 1500.0, "peak_elo": 1500.0, "n": 0, "wins": 0, "losses": 0, "draws": 0,
         "win_streak": 0, "lose_streak": 0, "ko_wins": 0, "sub_wins": 0, "dec_wins": 0,
         "sig_l": 0, "sig_a": 0, "opp_sig_l": 0, "opp_sig_a": 0,
@@ -220,6 +247,7 @@ def snapshot(s, date, ph, cur_weight, today_opp, div):
     f_secs = sum(h["secs"] for h in form)
     f_mins = f_secs / 60
     out = {
+        "glicko": s["g_r"], "glicko_rd": glicko_rd_now(s, date),
         "elo": s["elo"], "n_fights": n,
         "win_pct": s["wins"] / n if n else np.nan,
         "win_streak": s["win_streak"], "lose_streak": s["lose_streak"],
@@ -433,6 +461,7 @@ def replay(res, stats, phys, market, rng):
         k_elo2 = (40 if s2["n"] < 5 else 24) * finish_mult
         s1_new_elo = elo1_pre + k_elo1 * (res1 - exp1)
         s2_new_elo = elo2_pre + k_elo2 * ((1 - res1) - (1 - exp1))
+        rd1, rd2 = glicko_rd_now(s1, r.date), glicko_rd_now(s2, r.date)  # pre-fight
         update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight,
                      traits_of_2)
         update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight,
@@ -440,6 +469,10 @@ def replay(res, stats, phys, market, rng):
         s1["elo"], s2["elo"] = s1_new_elo, s2_new_elo
         s1["peak_elo"] = max(s1["peak_elo"], s1_new_elo)
         s2["peak_elo"] = max(s2["peak_elo"], s2_new_elo)
+        g1_r, g1_rd = glicko_update(s1["g_r"], rd1, s2["g_r"], rd2, res1)
+        g2_r, g2_rd = glicko_update(s2["g_r"], rd2, s1["g_r"], rd1, 1 - res1)
+        s1["g_r"], s1["g_rd"] = g1_r, g1_rd
+        s2["g_r"], s2["g_rd"] = g2_r, g2_rd
         for h, rr in ((h1, phys.get(k1, {}).get("reach", np.nan)),
                       (h2, phys.get(k2, {}).get("reach", np.nan))):
             if pd.notna(h):

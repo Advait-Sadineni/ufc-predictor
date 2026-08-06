@@ -48,8 +48,8 @@ Test set = 1,200 post-June-2023 fights with closing odds:
 | Predictor | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|
 | Market (no-vig closing odds) | 0.702 | 0.582 | 0.199 | 0.033 |
-| Stacked ensemble (LGB + XGB + logistic, 87 features) | 0.640 | 0.633 | 0.221 | 0.038 |
-| **Blend: market + model** | **0.705** | **0.578** | **0.197** | **0.031** |
+| Stacked ensemble (5-seed LGB bag + XGB + logistic) | 0.644 | 0.632 | 0.221 | 0.044 |
+| **Blend: market + model** | **0.704** | **0.577** | **0.197** | **0.027** |
 
 **The model does not beat the closing line** — no public-data model should be
 expected to: closing odds aggregate information (injuries, camp reports, weight
@@ -58,9 +58,9 @@ closing line, not raw accuracy, is the real benchmark, and why a model claiming
 to beat it from public data is usually leaking.
 
 The interesting finding: **the model carries information the market misses.**
-Blending model with market beats the market alone (log loss 0.578 vs 0.582) —
-better in 98.7% of 10,000 paired bootstrap resamples, 95% CI [+0.0006,
-+0.0091]. The significance is seed-sensitive (roughly 95-99% across random
+Blending model with market beats the market alone (log loss 0.577 vs 0.582) —
+better in 98.8% of 10,000 paired bootstrap resamples, 95% CI [+0.0007,
++0.0093]. The significance is seed-sensitive (roughly 95-99% across random
 fighter-orientation draws), so read it as a consistent but modest edge — and
 one still far too small to clear a sportsbook's vig. Full analysis, reliability diagram,
 and feature-importance writeup: **[report.md](report.md)**.
@@ -112,6 +112,9 @@ model does not beat closing odds, and it will tell you so itself.
 - [x] Phase 4 (negative result): style-matchup splits, trait interactions, and a cut-severity proxy were built, evaluated, and rejected — too sparse, no test-set improvement (see report.md § Negative results)
 - [x] Picks mode: `predict.py` for upcoming cards (probabilities only — no bet sizing, by design)
 - [x] Prop models: 6-way outcome (winner × method), goes-the-distance, expected takedowns — all evaluated vs baselines in report.md
+- [x] Price intelligence: all-US-books line shopping + round-totals markets; Under-2.5 model (adopted)
+- [x] Track-record machine: full-outcome grading (winners/distance/U2.5 + prop-market Brier), line-movement panel, model-vs-hunch bet tags
+- [x] 5-seed LightGBM bag (adopted: CV 0.6571→0.6535); Glicko ratings, recency weighting, method calibration all evaluated and rejected (see report.md)
 - [x] Data refresh (`--refresh`) and personal bet log with closing-line-value report (`track_bets.py`)
 - [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
 - [ ] Pre-UFC records for debut fighters (model is weakest on debuts)

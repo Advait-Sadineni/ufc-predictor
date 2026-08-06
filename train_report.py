@@ -86,6 +86,34 @@ def fit_lgb(params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
     return lgb.train(params, tr, num_boost_round=n_rounds)
 
 
+BAG_SEEDS = 5  # 5-seed bag adopted: CV logloss 0.6571 -> 0.6535 (Phase 9)
+
+
+class LGBBag:
+    """Average of BAG_SEEDS LightGBMs differing only in seeds."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict(self, X, pred_contrib=False):
+        if pred_contrib:
+            return self.models[0].predict(X, pred_contrib=True)
+        return np.mean([m.predict(X) for m in self.models], axis=0)
+
+    @property
+    def best_iteration(self):
+        its = [m.best_iteration for m in self.models if m.best_iteration]
+        return int(np.mean(its)) if its else None
+
+
+def fit_lgb_bag(base_params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
+    return LGBBag([
+        fit_lgb(dict(base_params, seed=42 + s, bagging_seed=42 + s,
+                     feature_fraction_seed=142 + s),
+                X_tr, y_tr, n_rounds, X_val, y_val)
+        for s in range(BAG_SEEDS)])
+
+
 def xgb_params(depth, eta, mcw):
     return dict(objective="binary:logistic", eval_metric="logloss", max_depth=depth,
                 eta=eta, min_child_weight=mcw, subsample=0.8, colsample_bytree=0.8,
@@ -194,8 +222,8 @@ def main():
         tr = df[df["date"] < start]
         va = df[(df["date"] >= start) & (df["date"] < end)].copy()
         Xm, ym = mirror(tr[feats], tr["a_wins"])
-        va["p_lgb"] = pred_lgb(fit_lgb(lgb_params(*best_lgb), Xm, ym, 3000,
-                                       va[feats], va["a_wins"]), va[feats])
+        va["p_lgb"] = pred_lgb(fit_lgb_bag(lgb_params(*best_lgb), Xm, ym, 3000,
+                                           va[feats], va["a_wins"]), va[feats])
         va["p_xgb"] = pred_xgb(fit_xgb(xgb_params(*best_xgb), Xm, ym, 3000,
                                        va[feats], va["a_wins"]), va[feats])
         lo = make_logistic().fit(Xm, ym)
@@ -224,7 +252,7 @@ def main():
     # ---------- 3. final models on full train, evaluated once on test ----------
     print("Training final models...")
     Xm, ym = mirror(train_all[feats], train_all["a_wins"])
-    final_lgb = fit_lgb(lgb_params(*best_lgb), Xm, ym, iters_lgb)
+    final_lgb = fit_lgb_bag(lgb_params(*best_lgb), Xm, ym, iters_lgb)
     final_xgb = fit_xgb(xgb_params(*best_xgb), Xm, ym, iters_xgb)
     final_log = make_logistic().fit(Xm, ym)
 
@@ -386,7 +414,8 @@ decline, layoffs, weight-class changes), rankings, and physical attributes.
 ({len(test)} fights). LightGBM (best {best_lgb}, cv {cv_lgb:.4f}) and XGBoost
 (best {best_xgb}, cv {cv_xgb:.4f}) tuned with 4-fold expanding-window CV inside
 the train period. The stacking combiner, isotonic calibrator, and market blend
-were all fitted on out-of-fold CV predictions only. Stack weights
+were all fitted on out-of-fold CV predictions only. The LightGBM component
+is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
 (LGB, XGB, logistic): {np.round(stacker.coef_[0], 2).tolist()}.
 
 ## Model comparison — full test set ({len(test)} fights)
@@ -459,6 +488,11 @@ fights against a given archetype for a stable rate — and added noise; the
 interactions are largely captured by the trees already. Test accuracy dropped
 from 0.655 to 0.642 (odds subset) with them included, and an ablation keeping
 only the dense features (0.637) did not recover the incumbent either.
+
+Also rejected (Phase 9): Glicko-style ratings with uncertainty (glicko /
+glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
+features already carry the signal) and recency-weighted training (best
+tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 
 ## Caveats
 
