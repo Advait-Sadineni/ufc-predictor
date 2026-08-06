@@ -65,7 +65,9 @@ tab_picks, tab_parlay, tab_results, tab_log, tab_model = st.tabs(
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_results(card_date):
-    """Completed-fight winners for a card date from ESPN. {frozenset: winner_name}"""
+    """Completed-fight results from ESPN: {frozenset: {winner, secs, sched}}.
+    secs = elapsed fight time ((period-1)*300 + clock); a fight that used the
+    full scheduled time is a decision."""
     import json as _json
     import urllib.request as _rq
     from build_features import norm_name as _norm
@@ -75,7 +77,7 @@ def fetch_results(card_date):
         data = _json.loads(_rq.urlopen(url, timeout=30).read())
     except Exception:
         return {}
-    winners = {}
+    out = {}
     for ev in data.get("events", []):
         for c in ev.get("competitions", []):
             comps = c.get("competitors", [])
@@ -83,8 +85,15 @@ def fetch_results(card_date):
                 continue
             names = [x.get("athlete", {}).get("displayName", "") for x in comps]
             w = next(x for x in comps if x.get("winner"))
-            winners[frozenset(_norm(n) for n in names)] = w.get("athlete", {}).get("displayName")
-    return winners
+            s = c.get("status", {})
+            sched = c.get("format", {}).get("regulation", {}).get("periods", 3)
+            secs = (s.get("period", sched) - 1) * 300 + float(s.get("clock", 300))
+            out[frozenset(_norm(n) for n in names)] = {
+                "winner": w.get("athlete", {}).get("displayName"),
+                "secs": secs, "sched": sched,
+                "went_distance": secs >= sched * 300,
+            }
+    return out
 
 # ------------------------------- Picks ---------------------------------------
 with tab_picks:
@@ -595,28 +604,50 @@ with tab_parlay:
                            "model-priced legs).")
 
 # ------------------------------ Results --------------------------------------
-def grade_card(snap, winners):
-    """Grade one snapshot against ESPN winners. Returns (rows, briers, mkt_briers, mkt_hits)."""
+def grade_card(snap, results):
+    """Grade one snapshot against ESPN results (winner + distance + U2.5).
+    Returns (rows, stats-dict of lists)."""
     from build_features import norm_name as _nn
-    graded, briers, mkt_briers, mkt_hits = [], [], [], []
+    graded = []
+    s = {"briers": [], "mkt_briers": [], "mkt_hits": [],
+         "dist_briers": [], "dist_hits": [], "u25_briers": [], "u25_hits": [],
+         "u25_mkt_briers": []}
     for _, r in snap.iterrows():
         key = frozenset((_nn(r["fighter_a"]), _nn(r["fighter_b"])))
-        if key not in winners:
+        if key not in results:
             continue
-        actual = winners[key]
+        res = results[key]
+        actual = res["winner"]
         a_won = _nn(actual) == _nn(r["fighter_a"])
         pick_a = r["p_a"] >= 0.5
         p_pick = r["p_a"] if pick_a else 1 - r["p_a"]
-        briers.append((r["p_a"] - (1 if a_won else 0)) ** 2)
+        s["briers"].append((r["p_a"] - (1 if a_won else 0)) ** 2)
         if pd.notna(r.get("fanduel_a")):
             p_mkt_a = no_vig_side(r["fanduel_a"], r["fanduel_b"])
-            mkt_briers.append((p_mkt_a - (1 if a_won else 0)) ** 2)
-            mkt_hits.append((p_mkt_a >= 0.5) == a_won)
-        graded.append({"Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
-                       "Model pick": f"{r['fighter_a'] if pick_a else r['fighter_b']} ({p_pick:.0%})",
-                       "Winner": actual, "Hit": "✅" if pick_a == a_won else "❌",
-                       "Brier": round(briers[-1], 3)})
-    return graded, briers, mkt_briers, mkt_hits
+            s["mkt_briers"].append((p_mkt_a - (1 if a_won else 0)) ** 2)
+            s["mkt_hits"].append((p_mkt_a >= 0.5) == a_won)
+        row = {"Fight": f"{r['fighter_a']} vs {r['fighter_b']}",
+               "Model pick": f"{r['fighter_a'] if pick_a else r['fighter_b']} ({p_pick:.0%})",
+               "Winner": actual, "Hit": "✅" if pick_a == a_won else "❌",
+               "Brier": round(s["briers"][-1], 3)}
+        # distance call
+        went = res["went_distance"]
+        p_dist = r["p_a_dec"] + r["p_b_dec"]
+        s["dist_briers"].append((p_dist - (1 if went else 0)) ** 2)
+        s["dist_hits"].append((p_dist >= 0.5) == went)
+        row["Distance"] = f"{'✅' if (p_dist >= 0.5) == went else '❌'} ({p_dist:.0%} dist, was {'dist' if went else 'finish'})"
+        # under-2.5 call (3-rounders with a model probability)
+        pu = r.get("p_u25")
+        if pd.notna(pu) and res["sched"] == 3:
+            under = res["secs"] < 750
+            s["u25_briers"].append((pu - (1 if under else 0)) ** 2)
+            s["u25_hits"].append((pu >= 0.5) == under)
+            row["U2.5"] = f"{'✅' if (pu >= 0.5) == under else '❌'} ({pu:.0%} under)"
+            if pd.notna(r.get("fd_under")):
+                p_mkt_u = no_vig_side(r["fd_under"], r["fd_over"])
+                s["u25_mkt_briers"].append((p_mkt_u - (1 if under else 0)) ** 2)
+        graded.append(row)
+    return graded, s
 
 
 with tab_results:
@@ -625,42 +656,57 @@ with tab_results:
     if not past_cards:
         st.info("No completed cards yet — grading appears here automatically "
                 "the day after each event.")
-    season = {"hits": 0, "n": 0, "briers": [], "mkt_briers": [], "mkt_hits": 0, "mkt_n": 0}
+    season = {"hits": 0, "n": 0}
+    acc = {k: [] for k in ("briers", "mkt_briers", "mkt_hits", "dist_briers",
+                           "dist_hits", "u25_briers", "u25_hits", "u25_mkt_briers")}
     for pc in past_cards:
-        winners = fetch_results(pc)
-        graded, briers, mkt_briers, mkt_hits = grade_card(pd.read_csv(cards[pc]), winners)
+        results = fetch_results(pc)
+        graded, s = grade_card(pd.read_csv(cards[pc]), results)
         if not graded:
             st.info(f"{pc}: results not posted yet.")
             continue
         season["hits"] += sum(1 for g in graded if g["Hit"] == "✅")
         season["n"] += len(graded)
-        season["briers"] += briers
-        season["mkt_briers"] += mkt_briers
-        season["mkt_hits"] += sum(mkt_hits)
-        season["mkt_n"] += len(mkt_hits)
+        for k in acc:
+            acc[k] += s[k]
         with st.expander(f"Card {pc} — graded", expanded=(pc == past_cards[-1])):
             st.dataframe(pd.DataFrame(graded), hide_index=True, width="stretch")
-            g1, g2, g3 = st.columns(3)
-            g1.metric("Model record", f"{sum(1 for g in graded if g['Hit'] == '✅')}/{len(graded)}")
-            g2.metric("Model Brier (lower = better)", f"{np.mean(briers):.3f}")
-            if mkt_briers:
-                g3.metric("FanDuel Brier (same fights)", f"{np.mean(mkt_briers):.3f}",
-                          delta=f"market {sum(mkt_hits)}/{len(mkt_hits)} picks", delta_color="off")
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Winner record", f"{sum(1 for g in graded if g['Hit'] == '✅')}/{len(graded)}")
+            g2.metric("Winner Brier", f"{np.mean(s['briers']):.3f}")
+            g3.metric("Distance calls", f"{sum(s['dist_hits'])}/{len(s['dist_hits'])}")
+            if s["mkt_briers"]:
+                g4.metric("FanDuel Brier (same fights)", f"{np.mean(s['mkt_briers']):.3f}",
+                          delta=f"market {sum(s['mkt_hits'])}/{len(s['mkt_hits'])} picks",
+                          delta_color="off")
     if season["n"]:
-        st.subheader("📊 Season scoreboard — every graded fight")
+        st.subheader("📊 Season scoreboard — everything we predict, graded")
         s1, s2, s3, s4 = st.columns(4)
-        s1.metric("Model record", f"{season['hits']}/{season['n']}"
+        s1.metric("Winner record", f"{season['hits']}/{season['n']}"
                   f" ({season['hits']/season['n']:.0%})")
-        s2.metric("Model Brier", f"{np.mean(season['briers']):.3f}")
-        if season["mkt_n"]:
+        s2.metric("Winner Brier", f"{np.mean(acc['briers']):.3f}")
+        if acc["mkt_hits"]:
             s3.metric("FanDuel record (same fights)",
-                      f"{season['mkt_hits']}/{season['mkt_n']}"
-                      f" ({season['mkt_hits']/season['mkt_n']:.0%})")
-            s4.metric("FanDuel Brier", f"{np.mean(season['mkt_briers']):.3f}")
-            lead = np.mean(season["mkt_briers"]) - np.mean(season["briers"])
-            st.caption(f"Brier difference (market − model): {lead:+.4f} — "
-                       f"{'model ahead' if lead > 0 else 'market ahead'} so far. "
-                       "One card proves nothing; this number matters after ~10 cards.")
+                      f"{sum(acc['mkt_hits'])}/{len(acc['mkt_hits'])}"
+                      f" ({sum(acc['mkt_hits'])/len(acc['mkt_hits']):.0%})")
+            s4.metric("FanDuel Brier", f"{np.mean(acc['mkt_briers']):.3f}")
+        p1, p2, p3, p4 = st.columns(4)
+        if acc["dist_hits"]:
+            p1.metric("Distance record", f"{sum(acc['dist_hits'])}/{len(acc['dist_hits'])}")
+            p2.metric("Distance Brier", f"{np.mean(acc['dist_briers']):.3f}")
+        if acc["u25_hits"]:
+            p3.metric("Under-2.5 record", f"{sum(acc['u25_hits'])}/{len(acc['u25_hits'])}")
+            note = (f"market {np.mean(acc['u25_mkt_briers']):.3f}"
+                    if acc["u25_mkt_briers"] else None)
+            p4.metric("Under-2.5 Brier", f"{np.mean(acc['u25_briers']):.3f}",
+                      delta=note, delta_color="off")
+        if acc["mkt_briers"]:
+            lead = np.mean(acc["mkt_briers"]) - np.mean(acc["briers"])
+            st.caption(f"Winner-Brier difference (market − model): {lead:+.4f} — "
+                       f"{'model ahead' if lead > 0 else 'market ahead'} so far. The "
+                       "Under-2.5 model-vs-market Brier is the prop benchmark that "
+                       "accrues as books post totals. One card proves nothing; these "
+                       "numbers matter after ~10 cards.")
 
 # ------------------------------ Bet log --------------------------------------
 with tab_log:
