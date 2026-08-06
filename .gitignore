@@ -5,3 +5,4 @@ bets.csv
 .git-credentials-ufc
 espn_probe.json
 ufc-clone/
+*.log
