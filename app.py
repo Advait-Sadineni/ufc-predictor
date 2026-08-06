@@ -291,11 +291,10 @@ with tab_parlay:
                 st.caption(note)
             return p_hit, est_dec
 
-        if target > 0:
-            # Goal mode sees EVERY variant of every fight (moneyline, method,
-            # double chance, both distance sides) and lets the probability-cost
-            # ratio choose — one leg per fight.
-            gc = []
+        def variant_pool():
+            """Every leg variant for every fight (ML, method, DC, distance sides,
+            real-priced rounds) — the full menu the optimizers choose from."""
+            out = []
             for _, r in df.iterrows():
                 pick_a = r["p_a"] >= 0.5
                 p_win = r["p_a"] if pick_a else 1 - r["p_a"]
@@ -311,24 +310,24 @@ with tab_parlay:
                 o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
                 why = str(r.get("why", "")) if "why" in df.columns else ""
                 if pd.notna(o) and p_win >= 0.55:
-                    gc.append((p_win, side, "moneyline", american_to_dec(o),
+                    out.append((p_win, side, "moneyline", american_to_dec(o),
                                f"FanDuel {o:+.0f}", f"edge: {why}", fight))
                 if meth[0][1] >= 0.35:
                     p_leg = meth[0][1]
-                    gc.append((p_leg, f"{side} by {meth[0][0]}", "method",
+                    out.append((p_leg, f"{side} by {meth[0][0]}", "method",
                                est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                                f"{meth[0][1]/p_win:.0%} of his win paths — edge: {why}", fight))
                 p_dc = meth[0][1] + meth[1][1]
                 if p_dc >= 0.50:
-                    gc.append((p_dc, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
+                    out.append((p_dc, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
                                est_prop_dec(p_dc),
                                f"fair {fair_american(p_dc):+.0f} (price on FanDuel)",
                                f"two live paths cover {p_dc/p_win:.0%} of his wins — edge: {why}", fight))
                 for p_leg, lbl in [(p_dist, "Goes the distance: " + fight),
                                    (1 - p_dist, "Doesn't go the distance: " + fight)]:
                     if p_leg >= 0.55:
-                        gc.append((p_leg, lbl, "fight-level", est_prop_dec(p_leg),
+                        out.append((p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                                    f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                                    "betting the fight's shape, not a side", fight))
                 pu = r.get("p_u25")
@@ -336,10 +335,14 @@ with tab_parlay:
                     for p_leg, o_r, tag in [(pu, r["fd_under"], "Under"),
                                             (1 - pu, r["fd_over"], "Over")]:
                         if p_leg >= 0.55:
-                            gc.append((p_leg, f"{tag} 2.5 rounds: {fight}", "rounds",
+                            out.append((p_leg, f"{tag} 2.5 rounds: {fight}", "rounds",
                                        american_to_dec(o_r),
                                        f"FanDuel {o_r:+.0f} ({tag[0]}2.5)",
                                        "fight-length bet at a real price", fight))
+            return out
+
+        if target > 0:
+            gc = variant_pool()
             required = (stake + target) / stake
             gc.sort(key=lambda t: np.log(t[0]) / np.log(t[3]), reverse=True)
             chosen, est_prod, p_hit, used_f = [], 1.0, 1.0, set()
@@ -381,21 +384,28 @@ with tab_parlay:
         res_main = render_ticket("Main ticket — the convictions, with their methods",
                                  main, main_stake, None)
         st.divider()
-        # Side ticket: breadth — 5-6 likely legs for the big multiplier.
-        sc_ = build_cands(dict(m_share=0.48, m_min=0.36, dc_share=0.76, shape=0.57))
-        sc_.sort(key=lambda t: t[0], reverse=True)
+        # Side ticket: the stretch play — best-EV leg per fight from the full
+        # variant pool (real prices beat estimates by construction), 4 legs max.
+        best_by_fight = {}
+        for c_leg in variant_pool():
+            if c_leg[0] < 0.5:
+                continue  # no underdog legs on tickets
+            cur = best_by_fight.get(c_leg[6])
+            if cur is None or c_leg[0] * c_leg[3] > cur[0] * cur[3]:
+                best_by_fight[c_leg[6]] = c_leg
+        sc_ = sorted(best_by_fight.values(), key=lambda t: t[0] * t[3], reverse=True)
         side, p = [], 1.0
         for c_leg in sc_:
-            if len(side) >= 6:
+            if len(side) >= 4:
                 break
-            if p * c_leg[0] >= 0.08 or len(side) < 3:
+            if p * c_leg[0] >= 0.15 or len(side) < 3:
                 side.append(c_leg)
                 p *= c_leg[0]
-        res_side = render_ticket("Side ticket — the breadth play", side, side_stake,
-                                 "The two tickets share their strongest legs on purpose — if "
-                                 "the favorites all land, both cash. Price each on FanDuel "
-                                 "against its estimate; if a quote is below it, pass on that "
-                                 "ticket.")
+        res_side = render_ticket("Side ticket — the stretch play", side, side_stake,
+                                 "Best-EV leg per fight, real prices first, four legs max — "
+                                 "the same logic that built the analysis-winning tickets. "
+                                 "Shares the strongest legs with the main on purpose. Price "
+                                 "each on FanDuel against its estimate; below it, pass.")
         if res_main and res_side and main and side:
             # exact joint across the union of fights (legs matched by fight)
             mmap = {c[6]: c for c in main}
