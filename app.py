@@ -225,8 +225,8 @@ with tab_parlay:
             tag = b.get("tag", "model") if "tag" in _pend.columns else "model"
             tag = tag if str(tag) != "nan" else "model"
             payout = b["stake"] * american_to_dec(b["odds"])
-            st.markdown(f"- **{b['pick']}** — ${b['stake']:.0f} at {b['odds']:+.0f} "
-                        f"→ ${payout:,.2f} if it hits · `{tag}`")
+            st.markdown(f"- **{b['pick']}** — \\${b['stake']:.0f} at {b['odds']:+.0f} "
+                        f"→ \\${payout:,.2f} if it hits · `{tag}`")
         st.caption("Frozen at placement — the suggestions below keep moving with "
                    "prices and snapshots; your book doesn't.")
         st.divider()
