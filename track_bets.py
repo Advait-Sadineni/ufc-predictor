@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 BETS = Path(__file__).parent / "bets.csv"
-COLS = ["id", "date", "event", "pick", "odds", "stake", "result", "close"]
+COLS = ["id", "date", "event", "pick", "odds", "stake", "result", "close", "tag"]
 
 
 def load():
@@ -76,6 +76,8 @@ def main():
     a.add_argument("--result", choices=["W", "L", "P"], default="")
     a.add_argument("--close", type=float, default=np.nan,
                    help="closing odds on your side (for CLV)")
+    a.add_argument("--tag", choices=["model", "hunch"], default="model",
+                   help="model-built bet or your own hunch (tracked separately)")
     r = sub.add_parser("result")
     r.add_argument("bet_id", type=int)
     r.add_argument("outcome", choices=["W", "L", "P"])
@@ -86,7 +88,8 @@ def main():
     if args.cmd == "add":
         row = {"id": (df["id"].max() + 1 if len(df) else 1), "date": args.date,
                "event": args.event, "pick": args.pick, "odds": args.odds,
-               "stake": args.stake, "result": args.result, "close": args.close}
+               "stake": args.stake, "result": args.result, "close": args.close,
+               "tag": args.tag}
         df = pd.DataFrame([row]) if df.empty else pd.concat(
             [df, pd.DataFrame([row])], ignore_index=True)
         df.to_csv(BETS, index=False)
@@ -116,6 +119,10 @@ def main():
     if dec:
         avg_imp = np.mean([implied(o) for o in settled.loc[settled['result'] != 'P', 'odds']])
         print(f"Record: {wins}-{dec-wins}  ({wins/dec:.0%} vs {avg_imp:.0%} break-even at your avg odds)")
+    if "tag" in settled.columns and settled["tag"].nunique() > 1:
+        for tag, g in settled.groupby(settled["tag"].fillna("model")):
+            print(f"  {tag}: {(g['result'] == 'W').sum()}-{(g['result'] == 'L').sum()}, "
+                  f"P/L ${g['pl'].sum():+,.2f} on ${g['stake'].sum():,.0f}")
     settled["ref_close"] = settled["close"]
     fill = settled["ref_close"].isna()
     settled.loc[fill, "ref_close"] = [snapshot_line(p) for p in settled.loc[fill, "pick"]]

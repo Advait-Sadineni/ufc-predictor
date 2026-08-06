@@ -161,6 +161,41 @@ with tab_picks:
                 edges.append({"Side": side, "FanDuel": f"{o:+.0f}",
                               "Model": p, "Market (no-vig)": no_vig_side(o, oo),
                               "Gap": gap})
+    with st.expander("📈 Line movement — FanDuel across snapshots"):
+        mov_files = sorted(PREDS.glob(f"{card}_*.csv"), key=lambda p: p.name)
+        if len(mov_files) < 2:
+            st.caption("Movement appears once there are two or more snapshots for "
+                       "this card (they accumulate Thu/Fri/Sat).")
+        else:
+            frames = [(f.name.split("_", 1)[1][:-4], pd.read_csv(f)) for f in mov_files]
+            rows_m = []
+            for _, r in df.iterrows():
+                pick_a = r["p_a"] >= 0.5
+                side = "a" if pick_a else "b"
+                series = {}
+                for tlabel, fr in frames:
+                    m = fr[(fr["fighter_a"] == r["fighter_a"])
+                           & (fr["fighter_b"] == r["fighter_b"])]
+                    if len(m) and f"fanduel_{side}" in m.columns:
+                        v = m.iloc[0][f"fanduel_{side}"]
+                        if pd.notna(v):
+                            series[tlabel] = v
+                if len(series) >= 2:
+                    vals = list(series.values())
+                    d0, d1 = bet_implied(vals[0]), bet_implied(vals[-1])
+                    steam = ("🟢 toward model pick" if d1 > d0 + 0.005 else
+                             "🔴 against model pick" if d1 < d0 - 0.005 else "flat")
+                    rows_m.append({"Pick": r["fighter_a"] if pick_a else r["fighter_b"],
+                                   **{k: f"{v:+.0f}" for k, v in series.items()},
+                                   "Steam": steam})
+            if rows_m:
+                st.dataframe(pd.DataFrame(rows_m), hide_index=True, width="stretch")
+                st.caption("Steam toward the model's side = the market agreeing "
+                           "late; against = the market learning something the "
+                           "stats can't see. Neither is proof — both are signal.")
+            else:
+                st.caption("No overlapping priced fights across snapshots yet.")
+
     if edges:
         st.subheader("Model vs FanDuel disagreements")
         st.dataframe(
@@ -173,6 +208,19 @@ with tab_picks:
 
 # --------------------------- Parlay builder ----------------------------------
 with tab_parlay:
+    _book = load_bets()
+    _pend = _book[~_book["result"].isin(["W", "L", "P"])] if len(_book) else _book
+    if len(_pend):
+        st.markdown("#### 📌 Your book — placed and pending")
+        for _, b in _pend.iterrows():
+            tag = b.get("tag", "model") if "tag" in _pend.columns else "model"
+            tag = tag if str(tag) != "nan" else "model"
+            payout = b["stake"] * american_to_dec(b["odds"])
+            st.markdown(f"- **{b['pick']}** — ${b['stake']:.0f} at {b['odds']:+.0f} "
+                        f"→ ${payout:,.2f} if it hits · `{tag}`")
+        st.caption("Frozen at placement — the suggestions below keep moving with "
+                   "prices and snapshots; your book doesn't.")
+        st.divider()
     c1, c2 = st.columns(2)
     stake = c1.number_input("Stake ($)", 5.0, 1000.0, 25.0, 5.0)
     n_legs = c2.slider("Candidate legs", 2, 6, 4)
@@ -618,19 +666,20 @@ with tab_results:
 with tab_log:
     with st.form("add_bet"):
         st.write("Log a bet")
-        f1, f2, f3, f4, f5 = st.columns([2, 1, 1, 1, 1])
+        f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
         pick = f1.text_input("Pick")
         odds = f2.number_input("Odds", -2000, 2000, -150, 5)
         stake_b = f3.number_input("Stake", 1.0, 10000.0, 25.0, 5.0)
         result = f4.selectbox("Result", ["pending", "W", "L", "P"])
         close = f5.number_input("Closing odds (CLV)", -2000, 2000, 0, 5)
+        bet_tag = f6.selectbox("Tag", ["model", "hunch"])
         if st.form_submit_button("Add") and pick:
             dfb = load_bets()
             row = {"id": (dfb["id"].max() + 1 if len(dfb) else 1),
                    "date": str(pd.Timestamp.today().date()), "event": card,
                    "pick": pick, "odds": odds, "stake": stake_b,
                    "result": "" if result == "pending" else result,
-                   "close": close if close else np.nan}
+                   "close": close if close else np.nan, "tag": bet_tag}
             dfb = pd.DataFrame([row]) if dfb.empty else pd.concat(
                 [dfb, pd.DataFrame([row])], ignore_index=True)
             dfb.to_csv(BETS, index=False)
