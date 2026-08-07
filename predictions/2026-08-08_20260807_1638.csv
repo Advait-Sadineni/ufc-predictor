@@ -1,0 +1,12 @@
+card_date,fighter_a,fighter_b,sched_rounds,p_a,p_a_ko,p_a_sub,p_a_dec,p_b_ko,p_b_sub,p_b_dec,exp_td,p_dist_model,p_u25,rec_a,rec_b,why,fanduel_a,fanduel_b,best_a,best_a_book,best_b,best_b_book,total_point,best_over,best_over_book,best_under,best_under_book
+2026-08-08,Gigi Canuto,Carol Foro,3,0.686,0.1894,0.1846,0.3191,0.0943,0.0548,0.1578,2.44,0.4182,0.5479,0-0,0-0,"corner, age, damage absorbed",,,,,,,,,,,
+2026-08-08,Juliana Miller,Ravena Oliveira,3,0.5664,0.0952,0.1698,0.3198,0.0484,0.0758,0.291,2.09,0.5713,0.3882,2-3,0-3,"corner, Elo, striking accuracy",-310.0,240.0,-298.0,draftkings,255.0,bovada,2.5,110.0,betonlineag,-130.0,betonlineag
+2026-08-08,Manoel Sousa,Richie Miranda,3,0.6854,0.3475,0.1444,0.265,0.0914,0.05,0.1018,2.41,0.4084,0.5776,1-0,0-0,"corner, age, Elo",-300.0,235.0,-298.0,betus,260.0,betonlineag,2.5,-120.0,bovada,-110.0,bovada
+2026-08-08,Louie Sutherland,José Montanha,3,0.5657,0.3007,0.0895,0.2315,0.1787,0.0782,0.1214,1.8,0.3642,0.6149,1-2,0-0,"corner, reach, reach (both)",-188.0,152.0,-182.0,betrivers,175.0,betonlineag,,,,,
+2026-08-08,Diyar Nurgozhay,Bruno Lopes,3,0.7183,0.2706,0.0673,0.3425,0.0594,0.0859,0.1743,1.94,0.4813,0.4164,1-2,1-2,"corner, age, striking defense",-160.0,130.0,-145.0,betonlineag,130.0,fanduel,,,,,
+2026-08-08,Steven Asplund,Guilherme Pat,3,0.6418,0.474,0.052,0.1896,0.1126,0.031,0.1408,0.91,0.478,0.4418,1-1,1-1,"corner, form slpm, recent opposition",-300.0,235.0,-285.0,betonlineag,250.0,bovada,2.5,-125.0,bovada,-105.0,bovada
+2026-08-08,Billy Ray Goff,Ty Miller,3,0.5053,0.1958,0.09,0.1975,0.2416,0.0649,0.2103,1.12,0.3667,0.5621,1-2,1-0,"corner, record, recent damage taken",,,,,,,,,,,
+2026-08-08,Amanda Lemos,Alexia Thainara,3,0.4022,0.0915,0.0464,0.2145,0.0628,0.0861,0.4987,3.24,0.5419,0.2918,9-6,3-0,"age, experience, takedowns",198.0,-250.0,215.0,betonlineag,-250.0,fanduel,2.5,-220.0,betonlineag,186.0,betonlineag
+2026-08-08,Darren Elkins,Yadier del Valle,3,0.3561,0.0567,0.1231,0.1483,0.1964,0.2318,0.2437,2.18,0.5138,0.4734,19-11,2-1,"age, experience, striking defense",490.0,-750.0,575.0,draftkings,-750.0,fanduel,2.5,180.0,betonlineag,-210.0,betonlineag
+2026-08-08,Diego Ferreira,Billy Quarantillo,3,0.6191,0.1321,0.0982,0.2732,0.1527,0.1354,0.2084,2.31,0.4295,0.4943,10-7,6-5,"corner, striking defense, layoff",,,,,,,,,,,
+2026-08-08,Mateusz Gamrot,Quillan Salkilld,5,0.443,0.1519,0.0681,0.1198,0.4693,0.0632,0.1277,2.82,0.3269,,9-4,5-0,"age, chin, reach",120.0,-148.0,122.0,betonlineag,-142.0,betonlineag,,,,,
