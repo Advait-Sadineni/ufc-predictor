@@ -110,8 +110,12 @@ with tab_picks:
 
         def price_bits(side):
             bits = []
+            if str(r.get(f"pro_{side}", "")) not in ("", "nan"):
+                bits.append(f"pro **{r[f'pro_{side}']}**")
             if str(r.get(f"rec_{side}", "")) not in ("", "nan"):
-                bits.append(f"UFC record **{r[f'rec_{side}']}**")
+                bits.append(f"UFC {r[f'rec_{side}']}")
+            if str(r.get(f"pre_{side}", "")) not in ("", "nan"):
+                bits.append(f"pre-UFC {r[f'pre_{side}']}")
             fd = r.get(f"fanduel_{side}")
             if pd.notna(fd):
                 bits.append(f"FanDuel {fd:+.0f}")

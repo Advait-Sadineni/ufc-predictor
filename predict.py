@@ -306,7 +306,8 @@ def main():
         title = int("Title" in abbrev or "title" in str(c.get("notes", "")))
         row, (nf1, rec1), (nf2, rec2) = bout_features(
             n1, n2, True, weight, women, periods, title, states, div_stats, phys)
-        brows.append((n1, n2, abbrev, row, nf1, nf2, rec1, rec2))
+        pro = [(x.get("records") or [{}])[0].get("summary") for x in comps]
+        brows.append((n1, n2, abbrev, row, nf1, nf2, rec1, rec2, pro[0], pro[1]))
 
     X = pd.DataFrame([b[3] for b in brows])
     for f in SNAP_FEATS:
@@ -325,7 +326,16 @@ def main():
     from scipy.stats import poisson as _pois
 
     saved, edges = [], []
-    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2), p, p6, td, cb, pdm, pu, tda, tdb in zip(
+    def pre_ufc(pro, ufc_rec):
+        """Pro record minus UFC record = the regional career the model can't see."""
+        try:
+            pw, pl = int(str(pro).split("-")[0]), int(str(pro).split("-")[1])
+            uw, ul = int(str(ufc_rec).split("-")[0]), int(str(ufc_rec).split("-")[1])
+            return f"{max(pw - uw, 0)}-{max(pl - ul, 0)}"
+        except (ValueError, AttributeError, IndexError):
+            return ""
+
+    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2, pro1, pro2), p, p6, td, cb, pdm, pu, tda, tdb in zip(
             brows, probs, P6, exp_td, contribs, p_dists, p_u25s, td_a, td_b):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
@@ -355,6 +365,8 @@ def main():
                                 if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)
                                 else np.nan),
                       "rec_a": rec1, "rec_b": rec2,
+                      "pro_a": pro1 or "", "pro_b": pro2 or "",
+                      "pre_a": pre_ufc(pro1, rec1), "pre_b": pre_ufc(pro2, rec2),
                       "why": why_string(cb, feats, p >= 0.5)})
         info = lookup_bout(book, n1, n2) if book else None
         if info:
