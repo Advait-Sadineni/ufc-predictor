@@ -109,7 +109,31 @@ def fit_props(df, feats, holdout_days=365):
     m_u25 = (_fit_binary(du, feats, (du["fight_secs"] < 750).astype(int), cut)
              if len(du) > 500 else None)
 
+    # per-fighter takedowns (mirrored: model always predicts fighter A's count,
+    # so calling it on the swapped view gives fighter B's)
+    dtf = df.dropna(subset=["td_landed_a", "td_landed_b"]).copy()
+    m_tdf = None
+    if len(dtf) > 500:
+        tr_f, va_f = dtf["date"] < cut, dtf["date"] >= cut
+        Xf_tr, _ = mirror(dtf.loc[tr_f, feats], dtf.loc[tr_f, "a_wins"])
+        yf_tr = pd.concat([dtf.loc[tr_f, "td_landed_a"], dtf.loc[tr_f, "td_landed_b"]],
+                          ignore_index=True)
+        Xf_all, _ = mirror(dtf[feats], dtf["a_wins"])
+        yf_all = pd.concat([dtf["td_landed_a"], dtf["td_landed_b"]], ignore_index=True)
+        m_tdf = _fit(_params("poisson", {"metric": "rmse"}), Xf_tr, yf_tr,
+                     dtf.loc[va_f, feats], dtf.loc[va_f, "td_landed_a"], Xf_all, yf_all)
+
+    def td_fighter(X, mirrored=False):
+        """Expected takedowns for fighter A (or B when mirrored=True)."""
+        if m_tdf is None:
+            return None
+        Xq = X.copy()
+        if mirrored:
+            Xq[ANTISYM] = -Xq[ANTISYM]
+        return m_tdf.predict(Xq)
+
     return {
+        "td_fighter": td_fighter,
         # raw 6-class stays primary: per-class isotonic calibration was
         # evaluated and REJECTED (test logloss 1.60 -> 2.05; holdout too small
         # per class). Kept under outcome6_cal for the report's record.

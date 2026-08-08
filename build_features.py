@@ -421,6 +421,10 @@ def replay(res, stats, phys, market, rng):
                 "fight_secs": secs,
                 "total_td": (st1["td_l"] + st2["td_l"]
                              if st1 is not None and st2 is not None else np.nan),
+                # per-fighter takedowns landed, oriented to A/B (prop markets
+                # are per fighter, not per fight)
+                "td_landed_a": ((st1 if a_first else st2) or {}).get("td_l", np.nan),
+                "td_landed_b": ((st2 if a_first else st1) or {}).get("td_l", np.nan),
                 "red_corner": 1 if a_first else -1,
                 "southpaw_vs_orthodox": int(stance_a == "Southpaw" and stance_b == "Orthodox")
                                       - int(stance_a == "Orthodox" and stance_b == "Southpaw"),
