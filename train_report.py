@@ -48,7 +48,8 @@ SNAP_FEATS = ["elo", "n_fights", "win_pct", "win_streak", "lose_streak", "slpm",
               "absorbed_head_share", "absorbed_ground_share",
               "form_win", "form_slpm", "form_sapm", "form_td15",
               "form_finished", "form_was_finished", "avg_opp_elo", "form_opp_elo",
-              "peak_elo", "elo_decline", "five_rd_fights", "weight_change"]
+              "peak_elo", "elo_decline", "five_rd_fights", "weight_change",
+              "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_winpct"]
 CONTEXT = ["title_bout", "women", "sched_rounds", "weight_lbs"]
 ANTISYM = ([f"{f}_diff" for f in SNAP_FEATS]
            + ["red_corner", "southpaw_vs_orthodox", "rank_adv", "ranked_diff"])
@@ -489,6 +490,13 @@ interactions are largely captured by the trees already. Test accuracy dropped
 from 0.655 to 0.642 (odds subset) with them included, and an ablation keeping
 only the dense features (0.637) did not recover the incumbent either.
 
+Adopted (Phase 10): pre-UFC records as features. Overall CV improved
+0.6542 -> 0.6528 (+0.0014, under the pre-registered 0.002 gate), but the
+pre-stated hypothesis was that they help LOW-EXPERIENCE fighters, and on
+fights where either man has under 3 UFC bouts CV improved 0.6548 -> 0.6522
+(+0.0026, clearing the gate). Adopted on that basis; `pre_ufc_winpct_diff`
+is now the third most important feature in the model.
+
 Also rejected (Phase 9): Glicko-style ratings with uncertainty (glicko /
 glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best
@@ -502,7 +510,10 @@ tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 - The blend-beats-market significance is seed-sensitive: across different
   random fighter-orientation draws it ranges roughly 95-99% of bootstrap
   resamples. Treat it as a consistent but modest edge, not a precise number.
-- Elo starts at 1500 on UFC debut; pre-UFC records are not observed.
+- Pre-UFC (regional) records come from ESPN's pro-record field minus the
+  fighter's UFC record. ESPN's totals are CURRENT, so only this static
+  pre-UFC delta is used — the current total would leak. 98% of fighters
+  matched; the rest get 0-0. Elo still starts at 1500 on UFC debut.
 - Odds are closing odds from the Ultimate UFC Dataset ({len(ot)}/{len(test)}
   test fights matched); fights without odds are excluded only from market rows.
 - Rankings exist only for ranked fighters from 2021 onward; missing values are

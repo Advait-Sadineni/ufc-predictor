@@ -21,8 +21,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from build_features import (DATA, ensure_data, load_raw, load_market, new_state,
-                            norm_name, opp_traits, replay, snapshot, SEED)
+from build_features import (DATA, ensure_data, load_raw, load_market, load_pre_ufc,
+                            new_state, norm_name, opp_traits, replay, snapshot, SEED)
 from train_report import (ANTISYM, CONTEXT, MODERN, SNAP_FEATS, fit_lgb, fit_lgb_bag, fit_xgb,
                           lgb_params, logit, make_logistic, mirror, xgb_params)
 import lightgbm as lgb  # noqa: F401  (via fit_lgb)
@@ -203,7 +203,7 @@ def parse_weight(abbrev):
 
 
 def bout_features(name1, name2, order1_first, weight, women, periods, title,
-                  states, div_stats, phys):
+                  states, div_stats, phys, pre_ufc=None):
     """Build one feature row for an upcoming bout; fighter A = red corner."""
     k1, k2 = norm_name(name1), norm_name(name2)
     s1 = states.get(k1) or new_state()
@@ -214,8 +214,9 @@ def bout_features(name1, name2, order1_first, weight, women, periods, title,
     h1, h2 = ph1.get("height", np.nan), ph2.get("height", np.nan)
     t2 = opp_traits(s2, h1, h2, ph2.get("stance", ""))  # fighter1's opponent
     t1 = opp_traits(s1, h2, h1, ph1.get("stance", ""))
-    sa = snapshot(s1, today, ph1, weight, t2, div)
-    sb = snapshot(s2, today, ph2, weight, t1, div)
+    pre_ufc = pre_ufc or {}
+    sa = snapshot(s1, today, ph1, weight, t2, div, pre_ufc.get(k1, (0, 0)))
+    sb = snapshot(s2, today, ph2, weight, t1, div, pre_ufc.get(k2, (0, 0)))
     stance_a, stance_b = ph1.get("stance", ""), ph2.get("stance", "")
     row = {
         "red_corner": 1 if order1_first else -1,
@@ -277,7 +278,8 @@ def main():
     rng = np.random.default_rng(SEED)
     res, stats, phys = load_raw()
     market = load_market()
-    rows, states, div_stats, _ = replay(res, stats, phys, market, rng)
+    pre_ufc = load_pre_ufc(res)
+    rows, states, div_stats, _ = replay(res, stats, phys, market, rng, pre_ufc)
     df = pd.DataFrame(rows)
     df = df[df["date"] >= MODERN].sort_values("date").reset_index(drop=True)
     for f in SNAP_FEATS:
@@ -305,7 +307,7 @@ def main():
         periods = c.get("format", {}).get("regulation", {}).get("periods", 3)
         title = int("Title" in abbrev or "title" in str(c.get("notes", "")))
         row, (nf1, rec1), (nf2, rec2) = bout_features(
-            n1, n2, True, weight, women, periods, title, states, div_stats, phys)
+            n1, n2, True, weight, women, periods, title, states, div_stats, phys, pre_ufc)
         pro = [(x.get("records") or [{}])[0].get("summary") for x in comps]
         brows.append((n1, n2, abbrev, row, nf1, nf2, rec1, rec2, pro[0], pro[1]))
 

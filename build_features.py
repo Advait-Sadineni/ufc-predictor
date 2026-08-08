@@ -147,6 +147,36 @@ def load_raw():
     return res, stats, phys
 
 
+def load_pre_ufc(res):
+    """Static pre-UFC record per fighter: ESPN pro record minus their full UFC
+    record from our own data. A regional career never changes, so this is
+    leak-free for every fight (unlike the current total, which does leak)."""
+    import json
+    path = DATA / "pro_records.json"
+    if not path.exists():
+        return {}
+    pro = json.loads(path.read_text())
+    pro.pop("_dates", None)
+    ufc = {}
+    for r in res.itertuples():
+        bout, outcome = str(r.BOUT), str(r.OUTCOME)
+        if " vs. " not in bout or outcome not in ("W/L", "L/W", "D/D"):
+            continue
+        k1, k2 = [norm_name(x) for x in bout.split(" vs. ", 1)]
+        for k, won in ((k1, outcome == "W/L"), (k2, outcome == "L/W")):
+            w, l = ufc.get(k, (0, 0))
+            ufc[k] = (w + int(won), l + int(outcome != "D/D" and not won))
+    out = {}
+    for k, summary in pro.items():
+        try:
+            pw, pl = (int(x) for x in str(summary).split("-")[:2])
+        except ValueError:
+            continue
+        uw, ul = ufc.get(k, (0, 0))
+        out[k] = (max(pw - uw, 0), max(pl - ul, 0))
+    return out
+
+
 def load_market():
     """(date, name-pair) -> per-fighter closing odds and weight-class rank."""
     m = pd.read_csv(DATA / "ufc-master.csv", low_memory=False)
@@ -232,7 +262,7 @@ def method_class(m):
     return None  # DQ, overturned, etc.
 
 
-def snapshot(s, date, ph, cur_weight, today_opp, div):
+def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
     """Pre-fight feature vector for one fighter. Rates are NaN before debut.
 
     today_opp: archetype dict of TODAY's opponent (activates matchup splits).
@@ -246,7 +276,13 @@ def snapshot(s, date, ph, cur_weight, today_opp, div):
     form = hist[-FORM_N:]
     f_secs = sum(h["secs"] for h in form)
     f_mins = f_secs / 60
+    pre_w, pre_l = pre
     out = {
+        # regional career before the UFC — static, so leak-free; matters most
+        # for debutants where every other career feature is empty
+        "pre_ufc_wins": pre_w, "pre_ufc_losses": pre_l,
+        "pre_ufc_fights": pre_w + pre_l,
+        "pre_ufc_winpct": pre_w / (pre_w + pre_l) if (pre_w + pre_l) else np.nan,
         "glicko": s["g_r"], "glicko_rd": glicko_rd_now(s, date),
         "elo": s["elo"], "n_fights": n,
         "win_pct": s["wins"] / n if n else np.nan,
@@ -353,10 +389,12 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
     })
 
 
-def replay(res, stats, phys, market, rng):
-    """Replay history in date order. Returns (feature rows, fighter states,
+def replay(res, stats, phys, market, rng, pre_ufc=None):
+    """Replay history in date order.
+    pre_ufc: {fighter_key: (wins, losses)} regional record before the UFC. Returns (feature rows, fighter states,
     division size stats) — states/div_stats reflect everything up to today,
     which is what predict.py needs for upcoming fights."""
+    pre_ufc = pre_ufc or {}
     res = res[res["date"].notna()].sort_values(["date", "EVENT", "BOUT"]).reset_index(drop=True)
     states, rows = {}, []
     div_stats = {}  # weight_lbs -> [height_sum, height_n, reach_sum, reach_n], pre-fight
@@ -409,8 +447,8 @@ def replay(res, stats, phys, market, rng):
             (ka, kb) = (k1, k2) if a_first else (k2, k1)
             (fa, fb) = (f1, f2) if a_first else (f2, f1)
             (ta, tb) = (traits_of_2, traits_of_1) if a_first else (traits_of_1, traits_of_2)
-            sa = snapshot(states[ka], r.date, phys.get(ka, {}), weight, ta, div)
-            sb = snapshot(states[kb], r.date, phys.get(kb, {}), weight, tb, div)
+            sa = snapshot(states[ka], r.date, phys.get(ka, {}), weight, ta, div, pre_ufc.get(ka, (0, 0)))
+            sb = snapshot(states[kb], r.date, phys.get(kb, {}), weight, tb, div, pre_ufc.get(kb, (0, 0)))
             stance_a = phys.get(ka, {}).get("stance", "")
             stance_b = phys.get(kb, {}).get("stance", "")
             row = {
@@ -491,7 +529,9 @@ def main():
     rng = np.random.default_rng(SEED)
     res, stats, phys = load_raw()
     market = load_market()
-    rows, states, div_stats, matched_odds = replay(res, stats, phys, market, rng)
+    pre_ufc = load_pre_ufc(res)
+    print(f"pre-UFC records: {len(pre_ufc)} fighters")
+    rows, states, div_stats, matched_odds = replay(res, stats, phys, market, rng, pre_ufc)
 
     df = pd.DataFrame(rows)
     out = DATA / "features.csv"
