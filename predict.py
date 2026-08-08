@@ -37,6 +37,37 @@ CACHE_TTL_S = 6 * 3600
 
 def _dec(o):
     return 1 + (o / 100 if o > 0 else 100 / -o)
+
+
+def _tokens(name):
+    """Normalized name parts, for matching 'Ian Garry' to 'Ian Machado Garry'."""
+    return frozenset(norm_name(t) for t in str(name).split() if norm_name(t))
+
+
+def lookup_bout(book, n1, n2):
+    """Odds for a bout, tolerant of feed-vs-ESPN naming differences."""
+    key = frozenset((norm_name(n1), norm_name(n2)))
+    if key in book:
+        return book[key]
+    t1, t2 = _tokens(n1), _tokens(n2)
+    for info in book.values():
+        for a, b in ((info["tok_a"], info["tok_b"]), (info["tok_b"], info["tok_a"])):
+            if ((t1 <= a or a <= t1) and (t2 <= b or b <= t2)):
+                return info
+    return None
+
+
+def side_value(info, name, field):
+    """info[field] entry for `name`, tolerant of feed-vs-ESPN naming."""
+    d, k = info[field], norm_name(name)
+    if k in d:
+        return d[k]
+    t = _tokens(name)
+    for feed_key, v in d.items():
+        ft = info["tok_by_key"].get(feed_key, frozenset())
+        if t <= ft or ft <= t:
+            return v
+    return None
 BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
 
 WC_LBS = {"Strawweight": 115, "Flyweight": 125, "Bantamweight": 135,
@@ -125,7 +156,13 @@ def fetch_books(refresh):
                            norm_name(ev.get("away_team", ""))))
         if len(names) != 2:
             continue
-        info = book.setdefault(names, {"fd": {}, "best": {}, "totals": {}})
+        info = book.setdefault(names, {
+            "fd": {}, "best": {}, "totals": {},
+            "tok_a": _tokens(ev.get("home_team", "")),
+            "tok_b": _tokens(ev.get("away_team", "")),
+            "tok_by_key": {norm_name(ev.get("home_team", "")): _tokens(ev.get("home_team", "")),
+                           norm_name(ev.get("away_team", "")): _tokens(ev.get("away_team", ""))},
+        })
         for bm in ev.get("bookmakers", []):
             bk = bm.get("key", "")
             for mkt in bm.get("markets", []):
@@ -312,15 +349,16 @@ def main():
                                 else np.nan),
                       "rec_a": rec1, "rec_b": rec2,
                       "why": why_string(cb, feats, p >= 0.5)})
-        if book and key in book:
-            info = book[key]
-            k1n, k2n = norm_name(n1), norm_name(n2)
-            if k1n in info["fd"] and k2n in info["fd"]:
-                o1, o2 = info["fd"][k1n], info["fd"][k2n]
+        info = lookup_bout(book, n1, n2) if book else None
+        if info:
+            fd1, fd2 = side_value(info, n1, "fd"), side_value(info, n2, "fd")
+            if fd1 is not None and fd2 is not None:
+                o1, o2 = fd1, fd2
                 saved[-1]["fanduel_a"], saved[-1]["fanduel_b"] = o1, o2
-            for kn, col in ((k1n, "a"), (k2n, "b")):
-                if kn in info["best"]:
-                    saved[-1][f"best_{col}"], saved[-1][f"best_{col}_book"] = info["best"][kn]
+            for nm, col in ((n1, "a"), (n2, "b")):
+                bv = side_value(info, nm, "best")
+                if bv is not None:
+                    saved[-1][f"best_{col}"], saved[-1][f"best_{col}_book"] = bv
             pt = frow.get("sched_rounds", 3) - 0.5
             t = info["totals"].get(pt)
             if t:
