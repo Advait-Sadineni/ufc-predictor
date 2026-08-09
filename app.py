@@ -545,13 +545,24 @@ with tab_parlay:
             def qkelly(p_t, d_t):
                 b = d_t - 1
                 return max((p_t * d_t - 1) / b, 0) / 4 if b > 0 else 0
+            # Kelly is only meaningful on verified prices. Prop legs are priced
+            # by our own estimator, so a Kelly split built on them is false
+            # precision — and it inverts the main/side plan by loading the
+            # lottery ticket, because estimated prop EV dwarfs moneyline EV.
+            all_real = all("FanDuel" in c[4] for c in main + side)
             km, ks = qkelly(pm, dm), qkelly(ps, ds)
-            if km + ks > 0:
+            if all_real and km + ks > 0:
                 am = budget * km / (km + ks)
-                st.caption(f"Quarter-Kelly split of your ${budget:.0f} (per model "
-                           f"estimates): main ${am:.0f} / side ${budget - am:.0f}. "
-                           f"Suggestion only — Kelly assumes the model's "
-                           f"probabilities are exactly right, and they aren't.")
+                st.caption(f"Quarter-Kelly split of your ${budget:.0f}: main "
+                           f"${am:.0f} / side ${budget - am:.0f}. Suggestion only — "
+                           f"Kelly assumes the model's probabilities are exactly "
+                           f"right, and it ignores that both tickets share legs.")
+            else:
+                st.caption("No staking suggestion: some legs are priced by our own "
+                           "estimator, not a real quote, so any Kelly number would "
+                           "be false precision. Stake the main as the conviction "
+                           "play and the side as entertainment — and check every "
+                           "prop against its fair price before you fire.")
             else:
                 st.caption(f"At current estimated prices neither ticket is +EV per "
                            f"the model — quarter-Kelly says $0/$0. Whatever you "
