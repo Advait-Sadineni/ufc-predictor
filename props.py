@@ -123,17 +123,53 @@ def fit_props(df, feats, holdout_days=365):
         m_tdf = _fit(_params("poisson", {"metric": "rmse"}), Xf_tr, yf_tr,
                      dtf.loc[va_f, feats], dtf.loc[va_f, "td_landed_a"], Xf_all, yf_all)
 
-    def td_fighter(X, mirrored=False):
-        """Expected takedowns for fighter A (or B when mirrored=True)."""
-        if m_tdf is None:
+    def _fit_count(col_a, col_b):
+        """Mirrored Poisson count model: predicts fighter A's total of `col`."""
+        d = df.dropna(subset=[col_a, col_b]).copy()
+        if len(d) <= 500:
             return None
-        Xq = X.copy()
-        if mirrored:
-            Xq[ANTISYM] = -Xq[ANTISYM]
-        return m_tdf.predict(Xq)
+        tr_c, va_c = d["date"] < cut, d["date"] >= cut
+        Xc_tr, _ = mirror(d.loc[tr_c, feats], d.loc[tr_c, "a_wins"])
+        yc_tr = pd.concat([d.loc[tr_c, col_a], d.loc[tr_c, col_b]], ignore_index=True)
+        Xc_all, _ = mirror(d[feats], d["a_wins"])
+        yc_all = pd.concat([d[col_a], d[col_b]], ignore_index=True)
+        return _fit(_params("poisson", {"metric": "rmse"}), Xc_tr, yc_tr,
+                    d.loc[va_c, feats], d.loc[va_c, col_a], Xc_all, yc_all)
+
+    m_sig = _fit_count("sig_landed_a", "sig_landed_b")
+    m_kd = _fit_count("kd_landed_a", "kd_landed_b")
+
+    def _sided(model):
+        def f(X, mirrored=False):
+            if model is None:
+                return None
+            Xq = X.copy()
+            if mirrored:
+                Xq[ANTISYM] = -Xq[ANTISYM]
+            return model.predict(Xq)
+        return f
+
+    def _dispersion(model, col_a):
+        """Negative-binomial r from training residuals. Fight-stat counts are
+        heavily overdispersed (strikes ~17x Poisson) because fight length
+        varies, so Poisson over/under probabilities are badly miscalibrated."""
+        if model is None:
+            return None
+        d = df.dropna(subset=[col_a])
+        mu = model.predict(d[feats])
+        mean, var = float(mu.mean()), float(((d[col_a] - mu) ** 2).mean())
+        return mean ** 2 / max(var - mean, 1e-6) if var > mean else None
+
+    td_fighter = _sided(m_tdf)
+    disp = {"td": _dispersion(m_tdf, "td_landed_a"),
+            "sig": _dispersion(m_sig, "sig_landed_a"),
+            "kd": _dispersion(m_kd, "kd_landed_a")}
 
     return {
         "td_fighter": td_fighter,
+        "sig_fighter": _sided(m_sig),
+        "kd_fighter": _sided(m_kd),
+        "dispersion": disp,
         # raw 6-class stays primary: per-class isotonic calibration was
         # evaluated and REJECTED (test logloss 1.60 -> 2.05; holdout too small
         # per class). Kept under outcome6_cal for the report's record.

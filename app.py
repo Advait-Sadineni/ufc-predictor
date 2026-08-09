@@ -151,13 +151,18 @@ with tab_picks:
                 st.markdown(f"<div style='text-align:center;color:#898781'>"
                             f"<i>edge: {why}</i></div>", unsafe_allow_html=True)
             if pd.notna(r.get("td_a")):
-                def td_line(nm, s):
-                    bits = [f"{r[f'td_{s}_o{int(l*10)}']:.0%} o{l}" for l in (0.5, 1.5, 2.5)
-                            if pd.notna(r.get(f"td_{s}_o{int(l*10)}"))]
-                    return f"{nm.split()[-1]} {r[f'td_{s}']:.1f} TD ({' · '.join(bits)})"
-                st.markdown(f"<div style='text-align:center;color:#898781'>"
-                            f"Takedowns — {td_line(r['fighter_a'], 'a')} &nbsp;|&nbsp; "
-                            f"{td_line(r['fighter_b'], 'b')}</div>", unsafe_allow_html=True)
+                def prop_line(nm, s):
+                    bits = [f"TD {r[f'td_{s}']:.1f} (o0.5 {r[f'td_{s}_o5']:.0%}"
+                            f" · o1.5 {r[f'td_{s}_o15']:.0%})"]
+                    if pd.notna(r.get(f"sig_{s}")):
+                        bits.append(f"strikes {r[f'sig_{s}']:.0f} (o24.5 {r[f'sig_{s}_o24']:.0%}"
+                                    f" · o49.5 {r[f'sig_{s}_o49']:.0%})")
+                    if pd.notna(r.get(f"kd_{s}_o5")):
+                        bits.append(f"KD {r[f'kd_{s}_o5']:.0%}")
+                    return f"**{nm.split()[-1]}** " + " · ".join(bits)
+                st.markdown(f"<div style='text-align:center;color:#898781;font-size:0.9em'>"
+                            f"{prop_line(r['fighter_a'], 'a')}<br>"
+                            f"{prop_line(r['fighter_b'], 'b')}</div>", unsafe_allow_html=True)
             if pd.notna(r.get("total_point")):
                 tb = []
                 if pd.notna(r.get("fd_over")):

@@ -320,12 +320,24 @@ def main():
     p_dists = props_m["distance"](X[feats])
     td_a = props_m["td_fighter"](X[feats])
     td_b = props_m["td_fighter"](X[feats], mirrored=True)
+    sig_a = props_m["sig_fighter"](X[feats])
+    sig_b = props_m["sig_fighter"](X[feats], mirrored=True)
+    kd_a = props_m["kd_fighter"](X[feats])
+    kd_b = props_m["kd_fighter"](X[feats], mirrored=True)
+    DISP = props_m["dispersion"]
     p_u25s = (props_m["under25"](X[feats]) if props_m["under25"] is not None
               else np.full(len(X), np.nan))
     contribs = f_lgb.predict(X[feats], pred_contrib=True)[:, :-1]  # drop bias col
     book = fetch_books(refresh)
 
-    from scipy.stats import poisson as _pois
+    from scipy.stats import nbinom as _nb, poisson as _pois
+
+    def p_over(mu, line, r):
+        """P(count > line). Negative binomial — fight-stat counts are heavily
+        overdispersed, so Poisson badly miscalibrates these markets."""
+        if r:
+            return float(1 - _nb.cdf(np.floor(line), r, r / (r + mu)))
+        return float(1 - _pois.cdf(np.floor(line), mu))
 
     saved, edges = [], []
     def pre_ufc(pro, ufc_rec):
@@ -337,8 +349,9 @@ def main():
         except (ValueError, AttributeError, IndexError):
             return ""
 
-    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2, pro1, pro2), p, p6, td, cb, pdm, pu, tda, tdb in zip(
-            brows, probs, P6, exp_td, contribs, p_dists, p_u25s, td_a, td_b):
+    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2, pro1, pro2), p, p6, td, cb, pdm, pu, counts in zip(
+            brows, probs, P6, exp_td, contribs, p_dists, p_u25s,
+            zip(td_a, td_b, sig_a, sig_b, kd_a, kd_b)):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
         side = p6[:3] if p >= 0.5 else p6[3:]
@@ -359,9 +372,15 @@ def main():
                       "p_a_dec": round(float(p6[2]), 4), "p_b_ko": round(float(p6[3]), 4),
                       "p_b_sub": round(float(p6[4]), 4), "p_b_dec": round(float(p6[5]), 4),
                       "exp_td": round(float(td), 2),
-                      "td_a": round(float(tda), 2), "td_b": round(float(tdb), 2),
-                      **{f"td_{s}_o{int(l*10)}": round(float(1 - _pois.cdf(np.floor(l), v)), 4)
-                         for s, v in (("a", tda), ("b", tdb)) for l in (0.5, 1.5, 2.5)},
+                      "td_a": round(float(counts[0]), 2), "td_b": round(float(counts[1]), 2),
+                      "sig_a": round(float(counts[2]), 1), "sig_b": round(float(counts[3]), 1),
+                      "kd_a": round(float(counts[4]), 2), "kd_b": round(float(counts[5]), 2),
+                      **{f"td_{s}_o{int(l*10)}": round(p_over(v, l, DISP["td"]), 4)
+                         for s, v in (("a", counts[0]), ("b", counts[1])) for l in (0.5, 1.5, 2.5)},
+                      **{f"sig_{s}_o{int(l)}": round(p_over(v, l, DISP["sig"]), 4)
+                         for s, v in (("a", counts[2]), ("b", counts[3])) for l in (24.5, 49.5, 74.5)},
+                      **{f"kd_{s}_o5": round(p_over(v, 0.5, DISP["kd"]), 4)
+                         for s, v in (("a", counts[4]), ("b", counts[5]))},
                       "p_dist_model": round(float(pdm), 4),
                       "p_u25": (round(float(pu), 4)
                                 if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)

@@ -463,6 +463,10 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
                 # are per fighter, not per fight)
                 "td_landed_a": ((st1 if a_first else st2) or {}).get("td_l", np.nan),
                 "td_landed_b": ((st2 if a_first else st1) or {}).get("td_l", np.nan),
+                "sig_landed_a": ((st1 if a_first else st2) or {}).get("sig_l", np.nan),
+                "sig_landed_b": ((st2 if a_first else st1) or {}).get("sig_l", np.nan),
+                "kd_landed_a": ((st1 if a_first else st2) or {}).get("kd", np.nan),
+                "kd_landed_b": ((st2 if a_first else st1) or {}).get("kd", np.nan),
                 "red_corner": 1 if a_first else -1,
                 "southpaw_vs_orthodox": int(stance_a == "Southpaw" and stance_b == "Orthodox")
                                       - int(stance_a == "Orthodox" and stance_b == "Southpaw"),
