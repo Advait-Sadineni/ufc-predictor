@@ -565,6 +565,51 @@ with tab_parlay:
                            "prop against its fair price before you fire.")
         st.divider()
 
+    with st.expander("📋 Shopping list — every play on the card, with the price to beat", expanded=False):
+        st.caption("Model probability, the fair price, and the number FanDuel must "
+                   "beat (fair + 15% cushion). Verified = a real quote we pulled; "
+                   "everything else you price in the app before firing.")
+        shop = []
+        for _, r in df.iterrows():
+            fight = f"{r['fighter_a']} vs {r['fighter_b']}"
+            pick_a = r["p_a"] >= 0.5
+            p_win = r["p_a"] if pick_a else 1 - r["p_a"]
+            side = r["fighter_a"] if pick_a else r["fighter_b"]
+            pre = "a" if pick_a else "b"
+            raw = {"KO/TKO": r[f"p_{pre}_ko"], "Sub": r[f"p_{pre}_sub"], "Dec": r[f"p_{pre}_dec"]}
+            sc = p_win / sum(raw.values())
+            meth = sorted(((k, v * sc) for k, v in raw.items()), key=lambda kv: -kv[1])
+            o = (r["fanduel_a"] if pick_a else r["fanduel_b"])
+            rows = [(f"{side} — moneyline", p_win, o)]
+            rows.append((f"{side} by {meth[0][0]}", meth[0][1], np.nan))
+            rows.append((f"{side} by {meth[0][0]} or {meth[1][0]}", meth[0][1] + meth[1][1], np.nan))
+            p_dist = r["p_a_dec"] + r["p_b_dec"]
+            rows.append((f"{fight} — {'goes' if p_dist >= .5 else 'does NOT go'} the distance",
+                         max(p_dist, 1 - p_dist), np.nan))
+            for s_, nm_ in (("a", r["fighter_a"]), ("b", r["fighter_b"])):
+                for ln, key in ((0.5, "o5"), (1.5, "o15")):
+                    v = r.get(f"td_{s_}_{key}")
+                    if pd.notna(v) and v >= 0.55:
+                        rows.append((f"{nm_} over {ln} takedowns", float(v), np.nan))
+            for lbl, pv, price in rows:
+                if pv < 0.45:
+                    continue
+                ev = (pv * american_to_dec(price) - 1) if pd.notna(price) else np.nan
+                shop.append({"Fight": fight, "Bet": lbl, "Model": pv,
+                             "Fair": f"{fair_american(pv):+.0f}",
+                             # demand a price implying LESS than the model's
+                             # probability — that gap is the cushion
+                             "Take above": f"{fair_american(pv * 0.85):+.0f}",
+                             "FanDuel": f"{price:+.0f}" if pd.notna(price) else "—",
+                             "EV": ev})
+        sdf = pd.DataFrame(shop).sort_values("Model", ascending=False)
+        st.dataframe(sdf, hide_index=True, width="stretch",
+                     column_config={"Model": st.column_config.NumberColumn(format="percent"),
+                                    "EV": st.column_config.NumberColumn(format="percent")})
+        st.caption("Rule of thumb: back the moneyline when no method dominates, take "
+                   "the fight-level (distance) bet when the winner is a coin flip, and "
+                   "only take a method leg when one path owns most of the fighter's wins.")
+
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
         fight_names = [f"{r['fighter_a']} vs {r['fighter_b']}" for _, r in df.iterrows()]
         sel = st.selectbox("Fight", fight_names, index=len(fight_names) - 1)
