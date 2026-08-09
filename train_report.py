@@ -515,6 +515,23 @@ ends in, 4 classes). It lost to base rates on every class — R1 0.1954 vs
 0.2499. The model can predict WHETHER a fight ends early; it cannot predict
 WHEN.
 
+Rejected (Phase 11): round-level cardio features. The raw stats carry
+per-round detail that fight-total aggregation destroys, so we extracted
+R1 output, late-round (R3+) output, a cardio ratio, late damage absorbed
+and deep-water rounds. All four targets got WORSE: winner CV 0.6466 ->
+0.6477, method log loss 1.611 -> 1.624, distance Brier 0.2355 -> 0.2377.
+Two reasons. Coverage is only 73% (a fighter needs third rounds to have a
+late-round rate at all), and the sample is self-selected — fighters who
+routinely reach round three differ systematically from those who do not,
+so the ratio encodes survivorship as much as conditioning. The features
+are still computed in features.csv; the model does not use them.
+
+Worth recording: the "fighters fade late" intuition is wrong at the
+population level. League-wide, significant strikes landed rise every
+round (R1 14.4, R2 16.3, R3 17.1, R4 18.1, R5 18.6) and the median
+fighter's late-round output is 1.09x his first-round output. Fights open
+up as they go; they do not slow down.
+
 Also rejected (Phase 9): Glicko-style ratings with uncertainty (glicko /
 glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best

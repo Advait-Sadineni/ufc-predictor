@@ -128,6 +128,14 @@ def load_raw():
     stat_cols = ["kd", "sig_l", "sig_a", "tot_l", "tot_a", "td_l", "td_a",
                  "sub_att", "ctrl", "head_l", "body_l", "leg_l",
                  "dist_l", "clinch_l", "ground_l"]
+    st["rnd"] = pd.to_numeric(st["ROUND"].str.extract(r"(\d+)")[0], errors="coerce")
+    # round-split output: early = R1, late = R3+ (cardio / fade signal that the
+    # fight-total aggregation destroys)
+    st["early_sig"] = st["sig_l"].where(st["rnd"] == 1, 0)
+    st["late_sig"] = st["sig_l"].where(st["rnd"] >= 3, 0)
+    st["early_rounds"] = (st["rnd"] == 1).astype(float)
+    st["late_rounds"] = (st["rnd"] >= 3).astype(float)
+    stat_cols = stat_cols + ["early_sig", "late_sig", "early_rounds", "late_rounds"]
     agg = st.groupby(["EVENT", "BOUT", "FIGHTER"], sort=False)[stat_cols].sum().reset_index()
     stats = {(e, b): g.set_index(g["FIGHTER"].map(norm_name))
              for (e, b), g in agg.groupby(["EVENT", "BOUT"], sort=False)}
@@ -227,6 +235,8 @@ def new_state():
         "td_l": 0, "td_a": 0, "opp_td_l": 0, "opp_td_a": 0,
         "kd": 0, "kd_taken": 0, "sub_att": 0, "ctrl": 0, "secs": 0,
         "head_l": 0, "body_l": 0, "leg_l": 0, "dist_l": 0, "clinch_l": 0, "ground_l": 0,
+        "early_sig": 0, "late_sig": 0, "early_rounds": 0, "late_rounds": 0,
+        "opp_early_sig": 0, "opp_late_sig": 0,
         "opp_head_l": 0, "opp_ground_l": 0,
         "opp_elo_sum": 0.0, "five_rd": 0, "last_weight": np.nan,
         "last_date": None, "hist": [],
@@ -305,6 +315,16 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         "sub_loss_rate": s["sub_losses"] / n if n else np.nan,
         "finished_rate": (s["ko_losses"] + s["sub_losses"]) / n if n else np.nan,
         "never_finished": float(s["ko_losses"] + s["sub_losses"] == 0) if n else np.nan,
+        # cardio: output per round early (R1) vs late (R3+). A fighter who
+        # halves his output by round three is a different bet from a steady one.
+        "r1_output": s["early_sig"] / s["early_rounds"] if s["early_rounds"] else np.nan,
+        "late_output": s["late_sig"] / s["late_rounds"] if s["late_rounds"] else np.nan,
+        "cardio_ratio": ((s["late_sig"] / s["late_rounds"]) /
+                         (s["early_sig"] / s["early_rounds"])
+                         if s["late_rounds"] and s["early_rounds"] and s["early_sig"] else np.nan),
+        "late_absorbed": (s["opp_late_sig"] / s["late_rounds"]
+                          if s["late_rounds"] else np.nan),
+        "deep_water_rounds": s["late_rounds"],
         "dec_win_rate": s["dec_wins"] / s["wins"] if s["wins"] else np.nan,
         "layoff_days": (date - s["last_date"]).days if s["last_date"] is not None else np.nan,
         "age": age, "height": ph.get("height", np.nan), "reach": ph.get("reach", np.nan),
@@ -356,12 +376,16 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
         s["td_l"] += my["td_l"]; s["td_a"] += my["td_a"]
         s["kd"] += my["kd"]; s["sub_att"] += my["sub_att"]; s["ctrl"] += my["ctrl"]
         s["head_l"] += my["head_l"]; s["body_l"] += my["body_l"]; s["leg_l"] += my["leg_l"]
+        for k in ("early_sig", "late_sig", "early_rounds", "late_rounds"):
+            s[k] += my.get(k, 0)
         s["dist_l"] += my["dist_l"]; s["clinch_l"] += my["clinch_l"]; s["ground_l"] += my["ground_l"]
     if opp is not None:
         s["opp_sig_l"] += opp["sig_l"]; s["opp_sig_a"] += opp["sig_a"]
         s["opp_td_l"] += opp["td_l"]; s["opp_td_a"] += opp["td_a"]
         s["kd_taken"] += opp["kd"]
         s["opp_head_l"] += opp["head_l"]; s["opp_ground_l"] += opp["ground_l"]
+        s["opp_early_sig"] += opp.get("early_sig", 0)
+        s["opp_late_sig"] += opp.get("late_sig", 0)
     s["secs"] += secs
     s["n"] += 1
     s["last_date"] = date
