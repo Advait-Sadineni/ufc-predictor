@@ -10,22 +10,22 @@ striking/grappling rates, strike-target and position mixes, recent-form windows
 decline, layoffs, weight-class changes), rankings, and physical attributes.
 
 **Split:** train ≤ 2023-06-03 (6650 fights), test after
-(1602 fights). LightGBM (best (15, 0.03, 60), cv 0.6470) and XGBoost
-(best (3, 0.03, 5), cv 0.6508) tuned with 4-fold expanding-window CV inside
+(1602 fights). LightGBM (best (31, 0.06, 20), cv 0.6542) and XGBoost
+(best (5, 0.03, 5), cv 0.6573) tuned with 4-fold expanding-window CV inside
 the train period. The stacking combiner, isotonic calibrator, and market blend
 were all fitted on out-of-fold CV predictions only. The LightGBM component
 is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
-(LGB, XGB, logistic): [0.61, 0.21, 0.06].
+(LGB, XGB, logistic): [0.61, 0.13, 0.18].
 
 ## Model comparison — full test set (1602 fights)
 
 | Predictor | n | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|---|
-| Stacked ensemble (LGB+XGB+logistic) | 1602 | 0.638 | 0.639 | 0.224 | 0.020 |
-| Ensemble + isotonic | 1602 | 0.633 | 0.641 | 0.224 | 0.015 |
-| LightGBM | 1602 | 0.637 | 0.639 | 0.224 | 0.024 |
-| XGBoost | 1602 | 0.637 | 0.639 | 0.224 | 0.030 |
-| Logistic regression (full features) | 1602 | 0.616 | 0.647 | 0.228 | 0.049 |
+| Stacked ensemble (LGB+XGB+logistic) | 1602 | 0.629 | 0.642 | 0.225 | 0.026 |
+| Ensemble + isotonic | 1602 | 0.622 | 0.651 | 0.227 | 0.041 |
+| LightGBM | 1602 | 0.627 | 0.643 | 0.226 | 0.033 |
+| XGBoost | 1602 | 0.625 | 0.646 | 0.227 | 0.033 |
+| Logistic regression (full features) | 1602 | 0.614 | 0.648 | 0.229 | 0.052 |
 | Elo only (logistic) | 1602 | 0.568 | 0.674 | 0.241 | 0.050 |
 
 ## The real benchmark — vig-removed closing odds (1182 test fights with odds)
@@ -33,16 +33,16 @@ is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
 | Predictor | n | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|---|
 | Market (no-vig closing odds) | 1182 | 0.702 | 0.582 | 0.199 | 0.033 |
-| Stacked ensemble | 1182 | 0.646 | 0.630 | 0.220 | 0.032 |
-| Blend: market + model | 1182 | 0.706 | 0.578 | 0.197 | 0.028 | logit blend, model coef=+0.350
+| Stacked ensemble | 1182 | 0.640 | 0.631 | 0.220 | 0.041 |
+| Blend: market + model | 1182 | 0.703 | 0.577 | 0.197 | 0.024 | logit blend, model coef=+0.291
 
-**Does the model beat the market?** No. The market's log loss (0.582) beats the model's (0.630).
+**Does the model beat the market?** No. The market's log loss (0.582) beats the model's (0.631).
 
-**Does the model add information beyond the market?** Not conclusively —
-blending model with market gives log loss 0.578 vs 0.582 for the
+**Does the model add information beyond the market?** Yes —
+blending model with market gives log loss 0.577 vs 0.582 for the
 market alone. Paired bootstrap on the log-loss difference (market − blend,
-10,000 resamples): 95% CI [-0.0002, +0.0096], blend better in
-97.1% of resamples.
+10,000 resamples): 95% CI [+0.0008, +0.0096], blend better in
+99.0% of resamples.
 
 This is the expected result for public pre-fight data: closing odds aggregate
 sharp bettors' information (injuries, camp changes, weight-cut issues, insider
@@ -57,11 +57,11 @@ the training-set class frequencies:
 
 | Target | Model | Baseline |
 |---|---|---|
-| 6-way outcome log loss | 1.591 | 1.712 (freq) — per-class isotonic REJECTED (2.077) |
-| 6-way outcome top-1 accuracy | 0.341 | 0.242 |
-| Goes the distance — Brier (dedicated model) | 0.237 | 0.234 (6-way-derived) |
+| 6-way outcome log loss | 1.595 | 1.712 (freq) — per-class isotonic REJECTED (2.050) |
+| 6-way outcome top-1 accuracy | 0.340 | 0.242 |
+| Goes the distance — Brier (dedicated model) | 0.236 | 0.234 (6-way-derived) |
 | Goes the distance — accuracy | 0.608 | 0.503 (majority class) |
-| Under 2.5 rounds (3R fights) — Brier | 0.236 | 0.248 (predict base rate) |
+| Under 2.5 rounds (3R fights) — Brier | 0.235 | 0.248 (predict base rate) |
 | Total takedowns — MAE | 1.68 | 1.81 (train mean) |
 
 Method-of-victory and distance predictions beat the frequency baselines but,
@@ -72,7 +72,7 @@ and prop markets carry roughly twice the vig of moneylines.
 
 ![Reliability diagram](plots/reliability.png)
 
-ECE (10 equal-count bins): model 0.032, market 0.033.
+ECE (10 equal-count bins): model 0.041, market 0.033.
 Isotonic calibration is reported for completeness; the raw ensemble is already
 close to calibrated.
 
@@ -83,16 +83,16 @@ close to calibrated.
 Top 10 by permutation importance (mean log-loss increase over 3 shuffles,
 through the full ensemble):
 
-- `age_diff`: +0.0224
-- `red_corner`: +0.0154
-- `pre_ufc_winpct_diff`: +0.0056
-- `elo_diff`: +0.0038
-- `form_sapm_diff`: +0.0033
-- `n_fights_diff`: +0.0023
-- `form_slpm_diff`: +0.0019
-- `elo_decline_diff`: +0.0017
-- `sapm_diff`: +0.0016
-- `td_avg_diff`: +0.0015
+- `age_diff`: +0.0261
+- `red_corner`: +0.0216
+- `elo_diff`: +0.0039
+- `n_fights_diff`: +0.0034
+- `form_sapm_diff`: +0.0031
+- `sapm_diff`: +0.0026
+- `td_avg_diff`: +0.0022
+- `elo_decline_diff`: +0.0019
+- `form_slpm_diff`: +0.0012
+- `absorbed_head_share_diff`: +0.0010
 
 ## Negative results (tried and rejected)
 
@@ -108,6 +108,13 @@ interactions are largely captured by the trees already. Test accuracy dropped
 from 0.655 to 0.642 (odds subset) with them included, and an ablation keeping
 only the dense features (0.637) did not recover the incumbent either.
 
+Adopted (Phase 10): pre-UFC records as features. Overall CV improved
+0.6542 -> 0.6528 (+0.0014, under the pre-registered 0.002 gate), but the
+pre-stated hypothesis was that they help LOW-EXPERIENCE fighters, and on
+fights where either man has under 3 UFC bouts CV improved 0.6548 -> 0.6522
+(+0.0026, clearing the gate). Adopted on that basis; `pre_ufc_winpct_diff`
+is now the third most important feature in the model.
+
 Also rejected (Phase 9): Glicko-style ratings with uncertainty (glicko /
 glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best
@@ -121,7 +128,10 @@ tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 - The blend-beats-market significance is seed-sensitive: across different
   random fighter-orientation draws it ranges roughly 95-99% of bootstrap
   resamples. Treat it as a consistent but modest edge, not a precise number.
-- Elo starts at 1500 on UFC debut; pre-UFC records are not observed.
+- Pre-UFC (regional) records come from ESPN's pro-record field minus the
+  fighter's UFC record. ESPN's totals are CURRENT, so only this static
+  pre-UFC delta is used — the current total would leak. 98% of fighters
+  matched; the rest get 0-0. Elo still starts at 1500 on UFC debut.
 - Odds are closing odds from the Ultimate UFC Dataset (1182/1602
   test fights matched); fights without odds are excluded only from market rows.
 - Rankings exist only for ranked fighters from 2021 onward; missing values are
