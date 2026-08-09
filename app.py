@@ -164,6 +164,55 @@ with tab_picks:
                 st.markdown(f"<div style='text-align:center;color:#898781;font-size:0.9em'>"
                             f"{prop_line(r['fighter_a'], 'a')}<br>"
                             f"{prop_line(r['fighter_b'], 'b')}</div>", unsafe_allow_html=True)
+            with st.expander("📊 Tale of the tape — what the model actually sees"):
+                ROWS = [
+                    ("UFC fights", "n_fights", "{:.0f}", True),
+                    ("Win %", "win_pct", "{:.0%}", True),
+                    ("Pre-UFC win %", "pre_ufc_winpct", "{:.0%}", True),
+                    ("Elo rating", "elo", "{:.0f}", True),
+                    ("Opposition quality (avg opp Elo)", "avg_opp_elo", "{:.0f}", True),
+                    ("Decline from peak Elo", "elo_decline", "{:+.0f}", True),
+                    ("Strikes landed /min", "slpm", "{:.1f}", True),
+                    ("Striking accuracy", "str_acc", "{:.0%}", True),
+                    ("Striking defense", "str_def", "{:.0%}", True),
+                    ("Strikes absorbed /min", "sapm", "{:.1f}", False),
+                    ("Knockdowns /15min", "kd_p15", "{:.2f}", True),
+                    ("Knockdowns absorbed /15", "kd_taken_p15", "{:.2f}", False),
+                    ("Takedowns /15min", "td_avg", "{:.1f}", True),
+                    ("Takedown defense", "td_def", "{:.0%}", True),
+                    ("Sub attempts /15min", "sub_att_p15", "{:.1f}", True),
+                    ("Control time share", "ctrl_min_share", "{:.0%}", True),
+                    ("Finish rate", "finish_rate", "{:.0%}", True),
+                    ("Last 3 fights won", "form_win", "{:.0%}", True),
+                    ("Age", "age", "{:.0f}", False),
+                    ("Height (cm)", "height", "{:.0f}", True),
+                    ("Reach (cm)", "reach", "{:.0f}", True),
+                    ("Days since last fight", "layoff_days", "{:.0f}", None),
+                ]
+                tape_rows, edge_a, edge_b = [], 0, 0
+                for label, col, fmt, higher_better in ROWS:
+                    va, vb = r.get(f"{col}_a"), r.get(f"{col}_b")
+                    if pd.isna(va) or pd.isna(vb):
+                        continue
+                    mark = ""
+                    if higher_better is not None and va != vb:
+                        a_wins = (va > vb) == higher_better
+                        mark = "◀" if a_wins else "▶"
+                        edge_a += int(a_wins); edge_b += int(not a_wins)
+                    tape_rows.append({r["fighter_a"]: fmt.format(va), "": mark,
+                                      "Stat": label, " ": "",
+                                      r["fighter_b"]: fmt.format(vb)})
+                if not tape_rows:
+                    st.caption("Stat detail isn't in this snapshot — rerun "
+                               "`python predict.py` to include it.")
+                if tape_rows:
+                    st.dataframe(pd.DataFrame(tape_rows)[[r["fighter_a"], "", "Stat",
+                                                          " ", r["fighter_b"]]],
+                                 hide_index=True, width="stretch")
+                    st.caption(f"Statistical edges — **{r['fighter_a']} {edge_a}** · "
+                               f"**{r['fighter_b']} {edge_b}**. ◀ / ▶ marks who wins "
+                               f"each category. The model weighs these — age, Elo and "
+                               f"recent damage carry the most — and never sees odds.")
             if pd.notna(r.get("total_point")):
                 tb = []
                 if pd.notna(r.get("fd_over")):

@@ -70,6 +70,12 @@ def side_value(info, name, field):
     return None
 BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
 
+# stats surfaced in the app's tale of the tape (what the model actually sees)
+TAPE_STATS = ["n_fights", "win_pct", "pre_ufc_winpct", "elo", "avg_opp_elo",
+              "elo_decline", "slpm", "str_acc", "str_def", "sapm", "kd_p15",
+              "kd_taken_p15", "td_avg", "td_def", "sub_att_p15", "ctrl_min_share",
+              "finish_rate", "form_win", "age", "height", "reach", "layoff_days"]
+
 WC_LBS = {"Strawweight": 115, "Flyweight": 125, "Bantamweight": 135,
           "Featherweight": 145, "Lightweight": 155, "Welterweight": 170,
           "Middleweight": 185, "Light Heavyweight": 205, "Heavyweight": 250}
@@ -385,6 +391,10 @@ def main():
                       "p_u25": (round(float(pu), 4)
                                 if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)
                                 else np.nan),
+                      **{f"{s}_{side}": (round(float(frow[f"{s}_{side}"]), 3)
+                                        if pd.notna(frow.get(f"{s}_{side}")) else np.nan)
+                         for s in TAPE_STATS for side in ("a", "b")
+                         if f"{s}_{side}" in frow},
                       "rec_a": rec1, "rec_b": rec2,
                       "pro_a": pro1 or "", "pro_b": pro2 or "",
                       "pre_a": pre_ufc(pro1, rec1), "pre_b": pre_ufc(pro2, rec2),
