@@ -14,8 +14,8 @@ import streamlit as st
 
 from parlay import (COIN_FLIP, american_to_dec, dec_to_american, fair_american,
                     implied, no_vig_side)
-from track_bets import (BETS, implied as bet_implied, load as load_bets, profit,
-                        snapshot_line)
+from track_bets import (PROFILES, bets_path, implied as bet_implied,
+                        load as load_bets, profit, snapshot_line)
 
 ROOT = Path(__file__).parent
 PREDS = ROOT / "predictions"
@@ -42,6 +42,7 @@ if not cards:
     st.warning("No prediction snapshots yet — run `python predict.py` first.")
     st.stop()
 card = st.sidebar.selectbox("Card", list(cards), format_func=lambda d: f"UFC card — {d}")
+who = st.sidebar.selectbox("Whose book", PROFILES, help="Each profile keeps its own bet log")
 df = pd.read_csv(cards[card])
 has_odds = df["fanduel_a"].notna() if "fanduel_a" in df else pd.Series(False, index=df.index)
 
@@ -234,10 +235,10 @@ with tab_picks:
 
 # --------------------------- Parlay builder ----------------------------------
 with tab_parlay:
-    _book = load_bets()
+    _book = load_bets(who)
     _pend = _book[~_book["result"].isin(["W", "L", "P"])] if len(_book) else _book
     if len(_pend):
-        st.markdown("#### 📌 Your book — placed and pending")
+        st.markdown(f"#### 📌 {who}'s book — placed and pending")
         for _, b in _pend.iterrows():
             tag = b.get("tag", "model") if "tag" in _pend.columns else "model"
             tag = tag if str(tag) != "nan" else "model"
@@ -729,7 +730,7 @@ with tab_results:
 # ------------------------------ Bet log --------------------------------------
 with tab_log:
     with st.form("add_bet"):
-        st.write("Log a bet")
+        st.write(f"Log a bet for **{who}**")
         f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
         pick = f1.text_input("Pick")
         odds = f2.number_input("Odds", -2000, 2000, -150, 5)
@@ -738,7 +739,7 @@ with tab_log:
         close = f5.number_input("Closing odds (CLV)", -2000, 2000, 0, 5)
         bet_tag = f6.selectbox("Tag", ["model", "hunch"])
         if st.form_submit_button("Add") and pick:
-            dfb = load_bets()
+            dfb = load_bets(who)
             row = {"id": (dfb["id"].max() + 1 if len(dfb) else 1),
                    "date": str(pd.Timestamp.today().date()), "event": card,
                    "pick": pick, "odds": odds, "stake": stake_b,
@@ -746,7 +747,7 @@ with tab_log:
                    "close": close if close else np.nan, "tag": bet_tag}
             dfb = pd.DataFrame([row]) if dfb.empty else pd.concat(
                 [dfb, pd.DataFrame([row])], ignore_index=True)
-            dfb.to_csv(BETS, index=False)
+            dfb.to_csv(bets_path(who), index=False)
             st.rerun()
 
 # ---------------------------- Model report -----------------------------------
@@ -764,7 +765,7 @@ with tab_model:
         st.info("report.md not found — run train_report.py.")
 
 with tab_log:
-    dfb = load_bets()
+    dfb = load_bets(who)
     if len(dfb):
         settled = dfb[dfb["result"].isin(["W", "L", "P"])].copy()
         if len(settled):
@@ -793,4 +794,32 @@ with tab_log:
                            "from luck. Judge nothing before ~50.")
         st.dataframe(dfb, hide_index=True, width="stretch")
     else:
-        st.caption("No bets logged yet.")
+        st.caption(f"No bets logged yet for {who}.")
+
+    # ---- leaderboard across profiles ----
+    board = []
+    for prof in PROFILES:
+        b = load_bets(prof)
+        if not len(b):
+            continue
+        s = b[b["result"].isin(["W", "L", "P"])].copy()
+        if not len(s):
+            board.append({"Who": prof, "Settled": 0, "Record": "—",
+                          "Staked": 0.0, "P/L": 0.0, "ROI": np.nan})
+            continue
+        s["pl"] = [profit(o, k, r) for o, k, r in zip(s["odds"], s["stake"], s["result"])]
+        w, l = (s["result"] == "W").sum(), (s["result"] == "L").sum()
+        board.append({"Who": prof, "Settled": len(s), "Record": f"{w}-{l}",
+                      "Staked": s["stake"].sum(), "P/L": s["pl"].sum(),
+                      "ROI": s["pl"].sum() / s["stake"].sum() if s["stake"].sum() else np.nan})
+    if len(board) > 1:
+        st.divider()
+        st.markdown("#### 🏆 Leaderboard")
+        st.dataframe(
+            pd.DataFrame(board).sort_values("P/L", ascending=False),
+            column_config={"P/L": st.column_config.NumberColumn(format="$%.2f"),
+                           "Staked": st.column_config.NumberColumn(format="$%.0f"),
+                           "ROI": st.column_config.NumberColumn(format="percent")},
+            hide_index=True, width="stretch")
+        st.caption("Same model, same picks — different choices. Over a season this "
+                   "is the only honest scoreboard of who actually bets well.")

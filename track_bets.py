@@ -22,11 +22,21 @@ import pandas as pd
 
 BETS = Path(__file__).parent / "bets.csv"
 COLS = ["id", "date", "event", "pick", "odds", "stake", "result", "close", "tag"]
+PROFILES = ["Addy", "Sam", "Abhinav"]
 
 
-def load():
-    if BETS.exists():
-        return pd.read_csv(BETS)
+def bets_path(profile=None):
+    """One CSV per profile; Addy (the owner) keeps the original bets.csv so the
+    existing history carries over."""
+    if not profile or profile == PROFILES[0]:
+        return BETS
+    return BETS.parent / f"bets_{profile.lower()}.csv"
+
+
+def load(profile=None):
+    path = bets_path(profile)
+    if path.exists():
+        return pd.read_csv(path)
     return pd.DataFrame(columns=COLS)
 
 
@@ -66,6 +76,7 @@ def snapshot_line(pick_name):
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
+    ap.add_argument("--profile", default=None, help="whose book (Advait/Sam/Abhinav)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("add")
     a.add_argument("--pick", required=True)
@@ -84,7 +95,7 @@ def main():
     sub.add_parser("report")
     args = ap.parse_args()
 
-    df = load()
+    df = load(args.profile)
     if args.cmd == "add":
         row = {"id": (df["id"].max() + 1 if len(df) else 1), "date": args.date,
                "event": args.event, "pick": args.pick, "odds": args.odds,
@@ -92,14 +103,14 @@ def main():
                "tag": args.tag}
         df = pd.DataFrame([row]) if df.empty else pd.concat(
             [df, pd.DataFrame([row])], ignore_index=True)
-        df.to_csv(BETS, index=False)
+        df.to_csv(bets_path(args.profile), index=False)
         print(f"Logged bet #{row['id']}: {args.pick} at {args.odds:+.0f} for ${args.stake:.2f}")
         return
     if args.cmd == "result":
         if args.bet_id not in df["id"].values:
             sys.exit(f"No bet #{args.bet_id}")
         df.loc[df["id"] == args.bet_id, "result"] = args.outcome
-        df.to_csv(BETS, index=False)
+        df.to_csv(bets_path(args.profile), index=False)
         print(f"Bet #{args.bet_id} settled: {args.outcome}")
         return
 
