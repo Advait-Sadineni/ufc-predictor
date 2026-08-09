@@ -134,9 +134,11 @@ def main():
         for tag, g in settled.groupby(settled["tag"].fillna("model")):
             print(f"  {tag}: {(g['result'] == 'W').sum()}-{(g['result'] == 'L').sum()}, "
                   f"P/L ${g['pl'].sum():+,.2f} on ${g['stake'].sum():,.0f}")
-    settled["ref_close"] = settled["close"]
+    settled["ref_close"] = settled["close"].astype(float)
     fill = settled["ref_close"].isna()
-    settled.loc[fill, "ref_close"] = [snapshot_line(p) for p in settled.loc[fill, "pick"]]
+    _f = [snapshot_line(p) for p in settled.loc[fill, "pick"]]
+    settled.loc[fill, "ref_close"] = pd.Series(_f, dtype="float64",
+                                              index=settled.index[fill])
     n_filled = int(fill.sum() - settled.loc[fill, "ref_close"].isna().sum())
     clv = settled.dropna(subset=["ref_close"])
     if len(clv):
