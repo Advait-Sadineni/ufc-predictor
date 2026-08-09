@@ -669,7 +669,8 @@ def grade_card(snap, results):
 
 with tab_results:
     today = str(pd.Timestamp.today().date())
-    past_cards = sorted([c for c in cards if c != "next" and c < today])
+    # include today's card — fights that have already finished grade immediately
+    past_cards = sorted([c for c in cards if c != "next" and c <= today])
     if not past_cards:
         st.info("No completed cards yet — grading appears here automatically "
                 "the day after each event.")
