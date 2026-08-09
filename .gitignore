@@ -1,7 +1,5 @@
 data/
 __pycache__/
-bets.csv
-bets_*.csv
 .odds_api_key
 .git-credentials-ufc
 espn_probe.json
