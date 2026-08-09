@@ -563,10 +563,6 @@ with tab_parlay:
                            "be false precision. Stake the main as the conviction "
                            "play and the side as entertainment — and check every "
                            "prop against its fair price before you fire.")
-            else:
-                st.caption(f"At current estimated prices neither ticket is +EV per "
-                           f"the model — quarter-Kelly says $0/$0. Whatever you "
-                           f"stake is entertainment budget; size it accordingly.")
         st.divider()
 
     with st.expander("🎯 Same-fight combo (SGP) calculator — e.g. Salkilld wins + inside the distance"):
