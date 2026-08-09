@@ -222,6 +222,7 @@ def new_state():
         "g_r": 1500.0, "g_rd": 350.0,
         "elo": 1500.0, "peak_elo": 1500.0, "n": 0, "wins": 0, "losses": 0, "draws": 0,
         "win_streak": 0, "lose_streak": 0, "ko_wins": 0, "sub_wins": 0, "dec_wins": 0,
+        "ko_losses": 0, "sub_losses": 0, "dec_losses": 0,
         "sig_l": 0, "sig_a": 0, "opp_sig_l": 0, "opp_sig_a": 0,
         "td_l": 0, "td_a": 0, "opp_td_l": 0, "opp_td_a": 0,
         "kd": 0, "kd_taken": 0, "sub_att": 0, "ctrl": 0, "secs": 0,
@@ -299,6 +300,11 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         "kd_taken_p15": s["kd_taken"] / p15 if p15 else np.nan,
         "ctrl_min_share": s["ctrl"] / s["secs"] if s["secs"] else np.nan,
         "finish_rate": (s["ko_wins"] + s["sub_wins"]) / s["wins"] if s["wins"] else np.nan,
+        # how he LOSES — chin and submission vulnerability over the whole career
+        "ko_loss_rate": s["ko_losses"] / n if n else np.nan,
+        "sub_loss_rate": s["sub_losses"] / n if n else np.nan,
+        "finished_rate": (s["ko_losses"] + s["sub_losses"]) / n if n else np.nan,
+        "never_finished": float(s["ko_losses"] + s["sub_losses"] == 0) if n else np.nan,
         "dec_win_rate": s["dec_wins"] / s["wins"] if s["wins"] else np.nan,
         "layoff_days": (date - s["last_date"]).days if s["last_date"] is not None else np.nan,
         "age": age, "height": ph.get("height", np.nan), "reach": ph.get("reach", np.nan),
@@ -374,6 +380,9 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
     elif result == 0:
         s["losses"] += 1
         s["lose_streak"] += 1; s["win_streak"] = 0
+        if "KO" in m: s["ko_losses"] += 1
+        elif "Submission" in m: s["sub_losses"] += 1
+        elif "Decision" in m: s["dec_losses"] += 1
     else:  # draw
         s["draws"] += 1
         s["win_streak"] = 0; s["lose_streak"] = 0

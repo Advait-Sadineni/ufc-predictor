@@ -49,7 +49,8 @@ SNAP_FEATS = ["elo", "n_fights", "win_pct", "win_streak", "lose_streak", "slpm",
               "form_win", "form_slpm", "form_sapm", "form_td15",
               "form_finished", "form_was_finished", "avg_opp_elo", "form_opp_elo",
               "peak_elo", "elo_decline", "five_rd_fights", "weight_change",
-              "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_winpct"]
+              "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_winpct",
+              "ko_loss_rate", "sub_loss_rate", "finished_rate", "never_finished"]
 CONTEXT = ["title_bout", "women", "sched_rounds", "weight_lbs"]
 ANTISYM = ([f"{f}_diff" for f in SNAP_FEATS]
            + ["red_corner", "southpaw_vs_orthodox", "rank_adv", "ranked_diff"])
@@ -496,6 +497,23 @@ pre-stated hypothesis was that they help LOW-EXPERIENCE fighters, and on
 fights where either man has under 3 UFC bouts CV improved 0.6548 -> 0.6522
 (+0.0026, clearing the gate). Adopted on that basis; `pre_ufc_winpct_diff`
 is now the third most important feature in the model.
+
+Adopted (Phase 11): career loss-method features — how often a fighter has
+been knocked out, submitted, or taken to a decision, plus a never-finished
+flag. The model tracked how fighters WIN but never how they LOSE, and
+whether a man has been stopped before is the most direct evidence for how
+his next fight ends. Method log loss 1.620 -> 1.611, 6-way top-1 0.337 ->
+0.346, distance Brier 0.2368 -> 0.2355 in a controlled ablation.
+
+Rejected (Phase 11): duration-conditioned count props — a fight-duration
+regression (MAE 291s vs 319s baseline) fed as a feature to the takedown
+model made it WORSE (MAE 1.079 -> 1.091; over-0.5 Brier 0.2201 -> 0.2257),
+because the count model already infers fight length from the same features.
+Also rejected: a round-by-round finish model (which round a 3-round fight
+ends in, 4 classes). It lost to base rates on every class — R1 0.1954 vs
+0.1943, R2 0.1323 vs 0.1294, R3 0.0725 vs 0.0700, decision 0.2511 vs
+0.2499. The model can predict WHETHER a fight ends early; it cannot predict
+WHEN.
 
 Also rejected (Phase 9): Glicko-style ratings with uncertainty (glicko /
 glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
