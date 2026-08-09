@@ -421,6 +421,15 @@ with tab_parlay:
                         out.append((p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                                    f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
                                    "betting the fight's shape, not a side", fight))
+                for s_, nm_ in (("a", r["fighter_a"]), ("b", r["fighter_b"])):
+                    for ln, key in ((0.5, "o5"), (1.5, "o15")):
+                        pv = r.get(f"td_{s_}_{key}")
+                        if pd.notna(pv) and pv >= 0.55:
+                            out.append((float(pv), f"{nm_} over {ln} takedowns", "takedowns",
+                                        est_prop_dec(float(pv)),
+                                        f"fair {fair_american(float(pv)):+.0f} (price on FanDuel)",
+                                        "grappling volume — priced off the takedown model", fight,
+                                        float(pv)))
                 pu = r.get("p_u25")
                 if pd.notna(pu) and pd.notna(r.get("fd_under")):
                     for p_leg, o_r, tag in [(pu, r["fd_under"], "Under"),
@@ -487,6 +496,12 @@ with tab_parlay:
             if cur is None or c_leg[0] * c_leg[3] > cur[0] * cur[3]:
                 best_by_fight[c_leg[6]] = c_leg
         sc_ = sorted(best_by_fight.values(), key=lambda t: t[0] * t[3], reverse=True)
+        # the main event earns a slot whenever its best variant is +EV — a
+        # fight-night ticket without the headline fight is a product failure
+        main_fight = f"{df.iloc[-1]['fighter_a']} vs {df.iloc[-1]['fighter_b']}"
+        me = best_by_fight.get(main_fight)
+        if me is not None and me[0] * me[3] > 1.0:
+            sc_ = [me] + [c for c in sc_ if c[6] != main_fight]
         side, p = [], 1.0
         for c_leg in sc_:
             if len(side) >= 4:
