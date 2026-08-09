@@ -910,10 +910,11 @@ with tab_log:
             m1.metric("P/L", f"${pl:+,.2f}")
             m2.metric("ROI", f"{pl / staked:+.1%}" if staked else "—")
             m3.metric("Record", f"{wins}-{decd - wins}")
-            settled["ref_close"] = settled["close"]
+            settled["ref_close"] = settled["close"].astype(float)
             fill_m = settled["ref_close"].isna()
-            settled.loc[fill_m, "ref_close"] = [snapshot_line(p)
-                                                for p in settled.loc[fill_m, "pick"]]
+            settled.loc[fill_m, "ref_close"] = pd.Series(
+                [snapshot_line(p) for p in settled.loc[fill_m, "pick"]],
+                dtype="float64", index=settled.index[fill_m])
             clv = settled.dropna(subset=["ref_close"])
             if len(clv):
                 edges_clv = [bet_implied(c) - bet_implied(o)
