@@ -301,27 +301,36 @@ with tab_parlay:
                 o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
                 ml_dec = american_to_dec(o) if pd.notna(o) else np.nan
                 why = str(r.get("why", "")) if "why" in df.columns else ""
+                # Skip ignorance-gap legs: a huge model-vs-market disagreement is
+                # usually the model missing information (debutants, unseen
+                # regional careers), not the book being wrong.
+                if pd.notna(o):
+                    o_other = r["fanduel_b"] if pick_a else r["fanduel_a"]
+                    if pd.notna(o_other) and p_win - no_vig_side(o, o_other) > 0.25:
+                        continue
                 leg = None
                 if p_win >= 0.62:
                     m1_share = meth[0][1] / p_win
                     if pd.notna(ml_dec) and p_win * ml_dec >= 1.05:
                         leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                               f"FanDuel's price is generous vs the model — edge: {why}", fight)
-                    elif m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]:
+                               f"FanDuel's price is generous vs the model — edge: {why}", fight, p_win)
+                    elif (m1_share >= TH["m_share"] and meth[0][1] >= TH["m_min"]
+                          # never trade a strong fighter down to a weak method leg
+                          and meth[0][1] >= TH["m_floor"]):
                         p_leg = meth[0][1]
                         leg = (p_leg, f"{side} by {meth[0][0]}", "method",
                                est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                               f"{m1_share:.0%} of his win paths end this way — edge: {why}", fight)
+                               f"{m1_share:.0%} of his win paths end this way — edge: {why}", fight, p_win)
                     elif (meth[0][1] + meth[1][1]) / p_win >= TH["dc_share"]:
                         p_leg = meth[0][1] + meth[1][1]
                         leg = (p_leg, f"{side} by {meth[0][0]} or {meth[1][0]}", "double chance",
                                est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                               f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}", fight)
+                               f"two live finish paths cover {(p_leg / p_win):.0%} of his wins — edge: {why}", fight, p_win)
                     elif pd.notna(ml_dec):
                         leg = (p_win, side, "moneyline", ml_dec, f"FanDuel {o:+.0f}",
-                               f"clear pick, no dominant method — edge: {why}", fight)
+                               f"clear pick, no dominant method — edge: {why}", fight, p_win)
                 elif max(p_dist, 1 - p_dist) >= TH["shape"]:
                     # Real-priced rounds leg (Under/Over 2.5) beats an estimated
                     # distance leg when FanDuel has posted the total.
@@ -334,14 +343,14 @@ with tab_parlay:
                         leg = (p_leg, f"{'Under' if under else 'Over'} 2.5 rounds: {fight}",
                                "rounds", american_to_dec(o_r),
                                f"FanDuel {o_r:+.0f} ({'U' if under else 'O'}2.5)",
-                               "winner too close to call — betting fight length at a real price", fight)
+                               "winner too close to call — betting fight length at a real price", fight, max(p_dist, 1-p_dist))
                     else:
                         p_leg = max(p_dist, 1 - p_dist)
                         lbl = ("Goes the distance: " if p_dist >= 0.5 else
                                "Doesn't go the distance: ") + fight
                         leg = (p_leg, lbl, "fight-level", est_prop_dec(p_leg),
                                f"fair {fair_american(p_leg):+.0f} (price on FanDuel)",
-                               "winner too close to call — betting the fight's shape, not a side", fight)
+                               "winner too close to call — betting the fight's shape, not a side", fight, max(p_dist, 1-p_dist))
                 if leg:
                     out.append(leg)
             return out
@@ -386,6 +395,11 @@ with tab_parlay:
                 p_dist = r["p_a_dec"] + r["p_b_dec"]
                 o = (r["fanduel_a"] if pick_a else r["fanduel_b"]) if pd.notna(r.get("fanduel_a")) else np.nan
                 why = str(r.get("why", "")) if "why" in df.columns else ""
+                # same ignorance-gap guard as the main builder
+                if pd.notna(o):
+                    _oo = r["fanduel_b"] if pick_a else r["fanduel_a"]
+                    if pd.notna(_oo) and p_win - no_vig_side(o, _oo) > 0.25:
+                        continue
                 if pd.notna(o) and p_win >= 0.55:
                     out.append((p_win, side, "moneyline", american_to_dec(o),
                                f"FanDuel {o:+.0f}", f"edge: {why}", fight))
@@ -450,8 +464,10 @@ with tab_parlay:
         main_stake = s1.number_input("Main ticket stake ($)", 25.0, 500.0, 75.0, 25.0)
         side_stake = s2.number_input("Side ticket stake ($)", 5.0, 100.0, 25.0, 5.0)
         # Main ticket: 2-3 chunkiest convictions, methods preferred.
-        mc = build_cands(dict(m_share=0.50, m_min=0.40, dc_share=0.80, shape=0.64))
-        mc.sort(key=lambda t: t[0], reverse=True)
+        mc = build_cands(dict(m_share=0.50, m_min=0.40, dc_share=0.80, shape=0.64, m_floor=0.55))
+        # rank by how strong the fighter/shape is, so a strong pick can't be
+        # demoted out of the ticket by its own leg-type downgrade
+        mc.sort(key=lambda t: t[7], reverse=True)
         main, p = [], 1.0
         for c_leg in mc:
             if len(main) >= 3 or (len(main) >= 2 and p * c_leg[0] < 0.25):
