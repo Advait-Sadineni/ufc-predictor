@@ -193,8 +193,12 @@ def load_market():
     for r in m.itertuples():
         kr, kb = norm_name(r.R_fighter), norm_name(r.B_fighter)
         market[(r.date, frozenset((kr, kb)))] = {
-            kr: (r.R_odds, getattr(r, "R_match_weightclass_rank", np.nan)),
-            kb: (r.B_odds, getattr(r, "B_match_weightclass_rank", np.nan)),
+            kr: (r.R_odds, getattr(r, "R_match_weightclass_rank", np.nan),
+                 getattr(r, "r_ko_odds", np.nan), getattr(r, "r_sub_odds", np.nan),
+                 getattr(r, "r_dec_odds", np.nan)),
+            kb: (r.B_odds, getattr(r, "B_match_weightclass_rank", np.nan),
+                 getattr(r, "b_ko_odds", np.nan), getattr(r, "b_sub_odds", np.nan),
+                 getattr(r, "b_dec_odds", np.nan)),
         }
     return market
 
@@ -529,9 +533,12 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
                                           - sb["td_avg"] * (1 - sa["td_def"]))
             okey = (r.date, frozenset((ka, kb)))
             if okey in market:
-                odds_a, rank_a = market[okey].get(ka, (np.nan, np.nan))
-                odds_b, rank_b = market[okey].get(kb, (np.nan, np.nan))
+                odds_a, rank_a, *mo_a = market[okey].get(ka, (np.nan,) * 5)
+                odds_b, rank_b, *mo_b = market[okey].get(kb, (np.nan,) * 5)
                 row["odds_a"], row["odds_b"] = odds_a, odds_b
+                # closing method-of-victory odds (market prior for the 6-way)
+                for s, mo in (("a", mo_a), ("b", mo_b)):
+                    row[f"mo_ko_{s}"], row[f"mo_sub_{s}"], row[f"mo_dec_{s}"] = mo
                 # lower rank number is better; positive = A advantage
                 row["rank_adv"] = (rank_b - rank_a) if pd.notna(rank_a) and pd.notna(rank_b) else np.nan
                 row["ranked_diff"] = int(pd.notna(rank_a)) - int(pd.notna(rank_b))

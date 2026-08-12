@@ -330,6 +330,18 @@ def main():
     ll6 = log_loss(y6, P6, labels=range(6))
     ll6_cal = log_loss(y6, P6_cal, labels=range(6))
     ll6_base = float(-np.mean(np.log(freq[y6])))
+    # method-market blend (Phase 13/1A) on the subset with closing method odds
+    blend6_line = ""
+    MO6 = ["mo_ko_a", "mo_sub_a", "mo_dec_a", "mo_ko_b", "mo_sub_b", "mo_dec_b"]
+    if pm_w := props_m.get("blend6_w"):
+        has6 = t6[MO6].notna().all(axis=1)
+        s6 = t6[has6]
+        ys6 = outcome6(s6).astype(int).values
+        ll_m = log_loss(ys6, np.clip(props_m["outcome6"](s6[feats]), 1e-6, 1),
+                        labels=range(6))
+        ll_b = log_loss(ys6, props_m["outcome6_blend"](s6), labels=range(6))
+        blend6_line = (f"| 6-way LL, method-odds subset (n={len(s6)}) — "
+                       f"model / blend w={pm_w:.1f} | {ll_b:.3f} | {ll_m:.3f} (model alone) |\n")
     acc6, acc6_base = (P6.argmax(1) == y6).mean(), (y6 == freq.argmax()).mean()
     y_dist = ((y6 == 2) | (y6 == 5)).astype(int)
     p_dist_6c = P6[:, 2] + P6[:, 5]
@@ -478,7 +490,7 @@ the training-set class frequencies:
 | Target | Model | Baseline |
 |---|---|---|
 | 6-way outcome log loss | {ll6:.3f} | {ll6_base:.3f} (freq) — per-class isotonic REJECTED ({ll6_cal:.3f}) |
-| 6-way outcome top-1 accuracy | {acc6:.3f} | {acc6_base:.3f} |
+{blend6_line}| 6-way outcome top-1 accuracy | {acc6:.3f} | {acc6_base:.3f} |
 | Goes the distance — Brier (dedicated model) | {dist_brier:.3f} | {dist_brier_6c:.3f} (6-way-derived) |
 | Goes the distance — accuracy | {dist_acc:.3f} | {dist_base:.3f} (majority class) |
 {u25_line}{count_lines}| Total takedowns — MAE | {td_mae:.2f} | {td_mae_base:.2f} (train mean) |

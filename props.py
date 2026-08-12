@@ -89,6 +89,53 @@ def fit_props(df, feats, holdout_days=365):
         C = np.column_stack([isos[k].predict(P[:, k]) for k in range(6)])
         return C / C.sum(axis=1, keepdims=True)
 
+    # method-market prior blend (Phase 13 / 1A): vig-removed 6-way distribution
+    # from closing KO/sub/dec odds, log-linear blended with the model. Weight
+    # fit on the holdout. Serves only where method odds exist (report; manual
+    # price checks) — upcoming-card predictions stay model-only.
+    MO_COLS = ["mo_ko_a", "mo_sub_a", "mo_dec_a", "mo_ko_b", "mo_sub_b", "mo_dec_b"]
+
+    def market6(rows):
+        """No-vig 6-way probabilities from method odds; NaN rows -> None."""
+        O = rows[MO_COLS].values.astype(float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            imp = np.where(O > 0, 100.0 / (O + 100.0), -O / (-O + 100.0))
+        return imp / imp.sum(axis=1, keepdims=True)
+
+    blend6_w = None
+    if all(c in d6.columns for c in MO_COLS):
+        hv = d6.loc[va_m].dropna(subset=MO_COLS)
+        if len(hv) > 200:
+            # the returned m6 is refit on ALL rows incl. the holdout, so its
+            # holdout predictions are in-sample; fit the blend weight against
+            # a holdout-clean first-stage model instead
+            m6_tr = lgb.train(p6, lgb.Dataset(X_tr, y_tr), num_boost_round=3000,
+                              valid_sets=[lgb.Dataset(d6.loc[va_m, feats], y6[va_m])],
+                              callbacks=[lgb.early_stopping(100, verbose=False)])
+            Pm = np.clip(m6_tr.predict(hv[feats]), 1e-6, 1)
+            Pk = np.clip(market6(hv), 1e-6, 1)
+            yv = outcome6(hv).astype(int).values
+            best = (None, np.inf)
+            for w in np.linspace(0, 1, 21):
+                L = np.exp((1 - w) * np.log(Pm) + w * np.log(Pk))
+                L /= L.sum(axis=1, keepdims=True)
+                ll = float(-np.mean(np.log(L[np.arange(len(yv)), yv])))
+                if ll < best[1]:
+                    best = (w, ll)
+            blend6_w = best[0]
+
+    def pred6_blend(rows):
+        """Blended 6-way for rows that carry method odds (else model-only)."""
+        P = np.clip(m6.predict(rows[feats]), 1e-6, 1)
+        if blend6_w is None or not all(c in rows.columns for c in MO_COLS):
+            return P
+        has = rows[MO_COLS].notna().all(axis=1).values
+        if has.any():
+            Pk = np.clip(market6(rows[has]), 1e-6, 1)
+            L = np.exp((1 - blend6_w) * np.log(P[has]) + blend6_w * np.log(Pk))
+            P[has] = L / L.sum(axis=1, keepdims=True)
+        return P
+
     dt = df.dropna(subset=["total_td"]).copy()
     tr_t, va_t = dt["date"] < cut, dt["date"] >= cut
     Xt_tr, _ = mirror(dt.loc[tr_t, feats], dt.loc[tr_t, "a_wins"])
@@ -251,6 +298,8 @@ def fit_props(df, feats, holdout_days=365):
         # per class). Kept under outcome6_cal for the report's record.
         "outcome6": m6.predict,
         "outcome6_cal": pred6_cal,
+        "outcome6_blend": pred6_blend,
+        "blend6_w": blend6_w,
         "total_td": mt.predict,
         "distance": m_dist.predict,
         "under25": (m_u25.predict if m_u25 is not None else None),

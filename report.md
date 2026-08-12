@@ -120,6 +120,17 @@ glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best
 tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 
+Adopted (Phase 13): method-market prior for the 6-way outcome model. The
+Ultimate UFC Dataset carries closing KO/sub/dec odds for 81-84% of its fights
+(65% of modern rows), previously unread. Vig-removed into a 6-way market
+distribution and log-linear blended with the model (weight fit on a
+holdout-clean first-stage model — the refit model's holdout predictions are
+in-sample and drove the weight to 0 until that leak was fixed). Blend weight
+w=0.8. Test, method-odds subset (n=1105): model 1.579, market alone 1.546,
+blend 1.526 — the blend beats both, and per-class Brier improves for all six
+classes. Upcoming-card predictions remain model-only (the live odds feed has
+no method prices); the blend serves wherever method odds exist.
+
 Adopted (Phase 13): duration-aware count props. The per-fighter strike /
 takedown / knockdown models previously trained on raw full-fight counts, so
 finish-heavy fighters (short fights) had their totals systematically
