@@ -284,6 +284,7 @@ def new_state():
         "opp_clinch_l": 0, "opp_dist_l": 0, "opp_ctrl": 0, "opp_sub_att": 0,
         "opp_elo_sum": 0.0, "five_rd": 0, "last_weight": np.nan,
         "sc_n": 0, "sc_close": 0, "sc_split": 0, "sc_share": 0.0,
+        "fin_choke": 0, "fin_ground": 0, "fin_mech_n": 0,
         "last_date": None, "hist": [],
     }
 
@@ -390,6 +391,11 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         # --- opponent quality (strength of schedule) ---
         "avg_opp_elo": s["opp_elo_sum"] / n if n else np.nan,
         "form_opp_elo": np.mean([h["opp_elo"] for h in form]) if form else np.nan,
+        # --- method fingerprint (Phase 13 / 2C+1E, for the 6-way model) ---
+        "ko_win_rate": s["ko_wins"] / s["wins"] if s["wins"] else np.nan,
+        "sub_win_rate": s["sub_wins"] / s["wins"] if s["wins"] else np.nan,
+        "choke_fin_rate": s["fin_choke"] / s["fin_mech_n"] if s["fin_mech_n"] else np.nan,
+        "ground_fin_rate": s["fin_ground"] / s["fin_mech_n"] if s["fin_mech_n"] else np.nan,
         # --- judges' scorecards (Phase 13 / 1C, adopted on the >=3-decisions
         # slice like pre-UFC records): decision narrowness as decline signal ---
         "sc_close": s["sc_close"] / s["sc_n"] if s["sc_n"] else np.nan,
@@ -433,7 +439,7 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
 
 def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cur_weight,
                  opp_archetype, own_exp=np.nan, opp_winpct_pre=np.nan, opp_sapm_pre=np.nan,
-                 card=None):
+                 card=None, mech=None):
     """Fold one completed fight into a fighter's career state."""
     if my is not None:
         s["sig_l"] += my["sig_l"]; s["sig_a"] += my["sig_a"]
@@ -479,6 +485,11 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
     else:  # draw
         s["draws"] += 1
         s["win_streak"] = 0; s["lose_streak"] = 0
+    if mech is not None and result == 1:
+        # finish-mechanism fingerprint from DETAILS (winner side only)
+        s["fin_mech_n"] += 1
+        s["fin_choke"] += mech[0]
+        s["fin_ground"] += mech[1]
     if card is not None and result in (0, 1):
         w_share, split, close = card
         s["sc_n"] += 1
@@ -643,10 +654,14 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
                 card = (float((a[:, 1] / a.sum(axis=1)).mean()),   # winner share
                         int((a[:, 1] < a[:, 0]).any()),            # split
                         int(margin <= 1.01))                       # close
+        mech = None
+        if "KO" in str(r.METHOD) or "Submission" in str(r.METHOD):
+            dtl = str(r.DETAILS)
+            mech = (int("Choke" in dtl), int("Ground" in dtl))
         update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight,
-                     traits_of_2, exp1, wp2, sapm2, card)
+                     traits_of_2, exp1, wp2, sapm2, card, mech)
         update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight,
-                     traits_of_1, 1 - exp1, wp1, sapm1, card)
+                     traits_of_1, 1 - exp1, wp1, sapm1, card, mech)
         s1["elo"], s2["elo"] = s1_new_elo, s2_new_elo
         s1["peak_elo"] = max(s1["peak_elo"], s1_new_elo)
         s2["peak_elo"] = max(s2["peak_elo"], s2_new_elo)

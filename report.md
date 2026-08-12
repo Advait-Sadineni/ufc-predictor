@@ -157,6 +157,15 @@ sub-slice basis as pre-UFC records. Face validity: Neil Magny's close-decision
 rate climbs 0.31 -> 0.38 across exactly the years the eye test said he
 declined.
 
+Also rejected (Phase 13): per-fighter method fingerprint for the 6-way model —
+`ko_win_rate`/`sub_win_rate` (career finish mix) and `choke_fin_rate`/
+`ground_fin_rate` (finish mechanism parsed from non-decision DETAILS text) as
+features (test 6-way LL 1.5922 -> 1.5926), and an empirical-Bayes
+recombination p(win) x Dirichlet-shrunk p(method|win, fighter) x opponent
+vulnerability, log-linear blended (optimal blend weight on a holdout-clean
+model: 0.00). The 6-way trees already extract the career method mix from
+existing features. Columns remain in features.csv unused.
+
 Also rejected (Phase 13): absorbed-side state — control time conceded,
 absorbed body/leg shares, submissions survived, non-significant volume,
 reversals (all parsed from raw round stats but previously dropped). CV
