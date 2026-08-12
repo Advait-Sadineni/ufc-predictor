@@ -145,6 +145,16 @@ averaged): sig o24.5 0.2204 -> 0.2176, sig o49.5 0.2130 -> 0.2111, TD o0.5
 (finish_rate >= 0.6) on every sig/TD line; Luque's mean P(over 24.5) drops
 78% -> 65% against a 33% actual (n=6).
 
+Also rejected (Phase 13): absorbed-side state — control time conceded,
+absorbed body/leg shares, submissions survived, non-significant volume,
+reversals (all parsed from raw round stats but previously dropped). CV
++0.0005; `better_rank` from ufc-master (93.9% coverage there, 23% matched
+nonzero here) added another +0.0005 — both under the 0.0020 gate. Columns
+remain in features.csv unused. Physical backfill (reach/DOB imputation from
+ufc-master's always-populated columns) was REVERTED outright: CV degraded
+0.6466 -> 0.6488 — those columns are themselves imputed, and LightGBM was
+already using the missingness as signal.
+
 Also rejected (Phase 13): orientation-symmetrized prediction — averaging each
 fight's two corner views, `(p(X) + 1 − p(mirror(X)))/2`, the exact
 infinite-orientation ensemble. CV 0.6466 -> 0.6471 (one fold −0.0011): mirrored

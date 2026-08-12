@@ -125,8 +125,9 @@ def load_raw():
     st["kd"] = pd.to_numeric(st["KD"], errors="coerce").fillna(0)
     st["sub_att"] = pd.to_numeric(st["SUB.ATT"], errors="coerce").fillna(0)
     st["ctrl"] = st["CTRL"].map(parse_ctrl)
+    st["rev"] = pd.to_numeric(st["REV."], errors="coerce").fillna(0)
     stat_cols = ["kd", "sig_l", "sig_a", "tot_l", "tot_a", "td_l", "td_a",
-                 "sub_att", "ctrl", "head_l", "body_l", "leg_l",
+                 "sub_att", "ctrl", "rev", "head_l", "body_l", "leg_l",
                  "dist_l", "clinch_l", "ground_l"]
     st["rnd"] = pd.to_numeric(st["ROUND"].str.extract(r"(\d+)")[0], errors="coerce")
     # round-split output: early = R1, late = R3+ (cardio / fade signal that the
@@ -152,7 +153,39 @@ def load_raw():
         }
         for k, r in tott.iterrows()
     }
+    # Phase 13/1D note: backfilling missing reach/DOB from ufc-master's
+    # always-populated physical columns was tested and REJECTED — CV degraded
+    # 0.6466 -> 0.6488. Those columns are themselves imputed, and LightGBM was
+    # already using the missingness as signal. _backfill_phys kept for the record.
     return res, stats, phys
+
+
+def _backfill_phys(phys):
+    """REJECTED (Phase 13/1D, see note in load_raw) — kept unused for the record.
+    Fill missing reach/height/DOB from ufc-master's physical columns."""
+    try:
+        m = pd.read_csv(DATA / "ufc-master.csv", low_memory=False,
+                        usecols=["R_fighter", "B_fighter", "date",
+                                 "R_Reach_cms", "B_Reach_cms",
+                                 "R_Height_cms", "B_Height_cms", "R_age", "B_age"])
+    except (FileNotFoundError, ValueError):
+        return
+    m["date"] = pd.to_datetime(m["date"])
+    m = m.sort_values("date")
+    for side in ("R", "B"):
+        for r in m.itertuples():
+            k = norm_name(getattr(r, f"{side}_fighter"))
+            e = phys.setdefault(k, {"height": np.nan, "reach": np.nan,
+                                    "stance": "nan", "dob": pd.NaT})
+            reach, height = getattr(r, f"{side}_Reach_cms"), getattr(r, f"{side}_Height_cms")
+            age = getattr(r, f"{side}_age")
+            if pd.isna(e.get("reach")) and pd.notna(reach):
+                e["reach"] = float(reach)
+            if pd.isna(e.get("height")) and pd.notna(height):
+                e["height"] = float(height)
+            if pd.isna(e.get("dob")) and pd.notna(age):
+                # integer age at fight date -> DOB estimate good to ~±6 months
+                e["dob"] = r.date - pd.Timedelta(days=(age + 0.5) * 365.25)
 
 
 def load_pre_ufc(res):
@@ -192,6 +225,7 @@ def load_market():
     market = {}
     for r in m.itertuples():
         kr, kb = norm_name(r.R_fighter), norm_name(r.B_fighter)
+        br = getattr(r, "better_rank", None)
         market[(r.date, frozenset((kr, kb)))] = {
             kr: (r.R_odds, getattr(r, "R_match_weightclass_rank", np.nan),
                  getattr(r, "r_ko_odds", np.nan), getattr(r, "r_sub_odds", np.nan),
@@ -199,6 +233,9 @@ def load_market():
             kb: (r.B_odds, getattr(r, "B_match_weightclass_rank", np.nan),
                  getattr(r, "b_ko_odds", np.nan), getattr(r, "b_sub_odds", np.nan),
                  getattr(r, "b_dec_odds", np.nan)),
+            # 93.9%-covered "who is better ranked" flag vs 19-27% for the
+            # numeric match_weightclass_rank pair (Phase 13 / 1D)
+            "_better": kr if br == "Red" else (kb if br == "Blue" else None),
         }
     return market
 
@@ -238,10 +275,12 @@ def new_state():
         "sig_l": 0, "sig_a": 0, "opp_sig_l": 0, "opp_sig_a": 0,
         "td_l": 0, "td_a": 0, "opp_td_l": 0, "opp_td_a": 0,
         "kd": 0, "kd_taken": 0, "sub_att": 0, "ctrl": 0, "secs": 0,
+        "tot_l": 0, "tot_a": 0, "rev": 0,
         "head_l": 0, "body_l": 0, "leg_l": 0, "dist_l": 0, "clinch_l": 0, "ground_l": 0,
         "early_sig": 0, "late_sig": 0, "early_rounds": 0, "late_rounds": 0,
         "opp_early_sig": 0, "opp_late_sig": 0,
-        "opp_head_l": 0, "opp_ground_l": 0,
+        "opp_head_l": 0, "opp_ground_l": 0, "opp_body_l": 0, "opp_leg_l": 0,
+        "opp_clinch_l": 0, "opp_dist_l": 0, "opp_ctrl": 0, "opp_sub_att": 0,
         "opp_elo_sum": 0.0, "five_rd": 0, "last_weight": np.nan,
         "last_date": None, "hist": [],
     }
@@ -349,6 +388,13 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         # --- opponent quality (strength of schedule) ---
         "avg_opp_elo": s["opp_elo_sum"] / n if n else np.nan,
         "form_opp_elo": np.mean([h["opp_elo"] for h in form]) if form else np.nan,
+        # --- absorbed-side / grappling-defense (Phase 13 / 1B) ---
+        "ctrl_conceded_share": s["opp_ctrl"] / s["secs"] if s["secs"] else np.nan,
+        "absorbed_body_share": s["opp_body_l"] / s["opp_sig_l"] if s["opp_sig_l"] else np.nan,
+        "absorbed_leg_share": s["opp_leg_l"] / s["opp_sig_l"] if s["opp_sig_l"] else np.nan,
+        "subs_survived_p15": _rate(s["opp_sub_att"], s["secs"]),
+        "nonsig_volume": (s["tot_l"] - s["sig_l"]) / mins if mins else np.nan,
+        "rev_p15": _rate(s["rev"], s["secs"]),
         # --- quality-adjusted recent form (Phase 12) ---
         "form_perf_vs_exp": np.mean([h["win"] - h["exp"] for h in form]) if form else np.nan,
         "form_opp_winpct": (lambda v: np.mean(v) if v else np.nan)(
@@ -385,6 +431,8 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
         s["sig_l"] += my["sig_l"]; s["sig_a"] += my["sig_a"]
         s["td_l"] += my["td_l"]; s["td_a"] += my["td_a"]
         s["kd"] += my["kd"]; s["sub_att"] += my["sub_att"]; s["ctrl"] += my["ctrl"]
+        s["tot_l"] += my["tot_l"]; s["tot_a"] += my["tot_a"]
+        s["rev"] += my.get("rev", 0)
         s["head_l"] += my["head_l"]; s["body_l"] += my["body_l"]; s["leg_l"] += my["leg_l"]
         for k in ("early_sig", "late_sig", "early_rounds", "late_rounds"):
             s[k] += my.get(k, 0)
@@ -394,6 +442,9 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
         s["opp_td_l"] += opp["td_l"]; s["opp_td_a"] += opp["td_a"]
         s["kd_taken"] += opp["kd"]
         s["opp_head_l"] += opp["head_l"]; s["opp_ground_l"] += opp["ground_l"]
+        s["opp_body_l"] += opp["body_l"]; s["opp_leg_l"] += opp["leg_l"]
+        s["opp_clinch_l"] += opp["clinch_l"]; s["opp_dist_l"] += opp["dist_l"]
+        s["opp_ctrl"] += opp["ctrl"]; s["opp_sub_att"] += opp["sub_att"]
         s["opp_early_sig"] += opp.get("early_sig", 0)
         s["opp_late_sig"] += opp.get("late_sig", 0)
     s["secs"] += secs
@@ -542,9 +593,13 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
                 # lower rank number is better; positive = A advantage
                 row["rank_adv"] = (rank_b - rank_a) if pd.notna(rank_a) and pd.notna(rank_b) else np.nan
                 row["ranked_diff"] = int(pd.notna(rank_a)) - int(pd.notna(rank_b))
+                better = market[okey].get("_better")
+                row["better_rank_adv"] = (1 if better == ka
+                                          else (-1 if better == kb else 0))
                 matched_odds += 1
             else:
                 row["rank_adv"], row["ranked_diff"] = np.nan, 0
+                row["better_rank_adv"] = 0
             rows.append(row)
 
         # ---- fold results into state ----
