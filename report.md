@@ -164,6 +164,13 @@ subsample 0.8, colsample 0.6, lambda 5): CV 0.6504 -> 0.6477 (+0.0027, clears).
 A 5-seed XGB bag on that config added +0.0011 (variance gate +0.0005): 0.6466.
 LGB bag 5 -> 10 seeds gained only +0.0001 — kept at 5.
 
+Also rejected (Phase 13): weight-miss and short-notice history text-mined from
+Wikipedia event pages (`fetch_wiki_events.py`; 711 events matched by date,
+1,207 miss flags, 458 short-notice flags). Prior-miss counts and
+current-weigh-in flags: CV +0.0002 overall, −0.0007 on the pre-stated
+either-fighter-has-missed slice. Weight-change, layoff, and form features
+already carry the signal. Fetcher and cache kept for future use.
+
 Also rejected (Phase 13): per-fighter method fingerprint for the 6-way model —
 `ko_win_rate`/`sub_win_rate` (career finish mix) and `choke_fin_rate`/
 `ground_fin_rate` (finish mechanism parsed from non-decision DETAILS text) as
