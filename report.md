@@ -120,6 +120,15 @@ glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best
 tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 
+Also rejected (Phase 12): quality-adjusted recent form — last-3
+over/under-performance vs Elo expectation (`form_perf_vs_exp`), recent
+opponents' pre-fight win% (`form_opp_winpct`), and opponent-adjusted striking
+output (`form_opp_adj_out`, own landed rate minus what that opponent typically
+absorbs). CV 0.6472 -> 0.6463 (+0.0010, 3 of 4 folds improved) — right
+direction but under the 0.0020 gate; `form_opp_elo` and the raw form window
+already carry most of this signal. Columns remain in `data/features.csv`
+unused.
+
 ## Caveats
 
 - Fighters are keyed by normalized name; the six known duplicate names

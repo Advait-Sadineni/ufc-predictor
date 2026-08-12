@@ -345,6 +345,12 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         # --- opponent quality (strength of schedule) ---
         "avg_opp_elo": s["opp_elo_sum"] / n if n else np.nan,
         "form_opp_elo": np.mean([h["opp_elo"] for h in form]) if form else np.nan,
+        # --- quality-adjusted recent form (Phase 12) ---
+        "form_perf_vs_exp": np.mean([h["win"] - h["exp"] for h in form]) if form else np.nan,
+        "form_opp_winpct": (lambda v: np.mean(v) if v else np.nan)(
+            [h["opp_winpct"] for h in form if pd.notna(h["opp_winpct"])]),
+        "form_opp_adj_out": (lambda v: np.mean(v) if v else np.nan)(
+            [h["opp_adj_out"] for h in form if pd.notna(h["opp_adj_out"])]),
         # --- trajectory / experience ---
         "peak_elo": s["peak_elo"],
         "elo_decline": s["elo"] - s["peak_elo"],
@@ -369,7 +375,7 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
 
 
 def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cur_weight,
-                 opp_archetype):
+                 opp_archetype, own_exp=np.nan, opp_winpct_pre=np.nan, opp_sapm_pre=np.nan):
     """Fold one completed fight into a fighter's career state."""
     if my is not None:
         s["sig_l"] += my["sig_l"]; s["sig_a"] += my["sig_a"]
@@ -419,6 +425,10 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
         "was_finished": int(result == 0 and finish),
         "opp_elo": opp_elo_pre,
         "opp": opp_archetype,
+        "exp": own_exp,
+        "opp_winpct": opp_winpct_pre,
+        "opp_adj_out": (my["sig_l"] / (secs / 60) - opp_sapm_pre
+                        if my is not None and secs and pd.notna(opp_sapm_pre) else np.nan),
     })
 
 
@@ -541,10 +551,15 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
         s1_new_elo = elo1_pre + k_elo1 * (res1 - exp1)
         s2_new_elo = elo2_pre + k_elo2 * ((1 - res1) - (1 - exp1))
         rd1, rd2 = glicko_rd_now(s1, r.date), glicko_rd_now(s2, r.date)  # pre-fight
+        # pre-fight opponent-quality scalars, captured before either state mutates
+        wp1 = s1["wins"] / s1["n"] if s1["n"] else np.nan
+        wp2 = s2["wins"] / s2["n"] if s2["n"] else np.nan
+        sapm1 = s1["opp_sig_l"] / (s1["secs"] / 60) if s1["secs"] else np.nan
+        sapm2 = s2["opp_sig_l"] / (s2["secs"] / 60) if s2["secs"] else np.nan
         update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight,
-                     traits_of_2)
+                     traits_of_2, exp1, wp2, sapm2)
         update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight,
-                     traits_of_1)
+                     traits_of_1, 1 - exp1, wp1, sapm1)
         s1["elo"], s2["elo"] = s1_new_elo, s2_new_elo
         s1["peak_elo"] = max(s1["peak_elo"], s1_new_elo)
         s2["peak_elo"] = max(s2["peak_elo"], s2_new_elo)
