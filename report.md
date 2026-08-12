@@ -145,6 +145,18 @@ averaged): sig o24.5 0.2204 -> 0.2176, sig o49.5 0.2130 -> 0.2111, TD o0.5
 (finish_rate >= 0.6) on every sig/TD line; Luque's mean P(over 24.5) drops
 78% -> 65% against a 33% actual (n=6).
 
+Adopted (Phase 13): judges' scorecard features from the raw results DETAILS
+column (98.6% of decisions parse; scores are stored loser-first/winner-second,
+verified against UFC 284/293 official cards). Per-fighter as-of features:
+`sc_close` (share of career decisions within 1 point), `sc_split` (share with
+a dissenting judge), `sc_share` (mean share of points won). Overall CV moved
+only +0.0004, but the PRE-STATED hypothesis — decision narrowness is a decline
+signal, so it helps where both fighters have >=3 scored decisions — cleared
+the gate on that slice: CV 0.6411 -> 0.6362 (+0.0049). Adopted on the same
+sub-slice basis as pre-UFC records. Face validity: Neil Magny's close-decision
+rate climbs 0.31 -> 0.38 across exactly the years the eye test said he
+declined.
+
 Also rejected (Phase 13): absorbed-side state — control time conceded,
 absorbed body/leg shares, submissions survived, non-significant volume,
 reversals (all parsed from raw round stats but previously dropped). CV

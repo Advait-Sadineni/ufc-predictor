@@ -57,6 +57,7 @@ def ensure_data(refresh=False):
 KNOWN_DUPES = {"brunosilva", "jeansilva", "joeygomez", "michaelmcdonald",
                "mikedavis", "victorvalenzuela"}
 FORM_N = 3          # "recent form" window (fights)
+SCORE_RE = re.compile(r"(\d{1,3})\s*-\s*(\d{1,3})")  # judge scorecards in DETAILS
 FINISH_K_MULT = 1.4  # Elo update boost for KO/sub wins
 
 WEIGHT_LBS = {
@@ -282,6 +283,7 @@ def new_state():
         "opp_head_l": 0, "opp_ground_l": 0, "opp_body_l": 0, "opp_leg_l": 0,
         "opp_clinch_l": 0, "opp_dist_l": 0, "opp_ctrl": 0, "opp_sub_att": 0,
         "opp_elo_sum": 0.0, "five_rd": 0, "last_weight": np.nan,
+        "sc_n": 0, "sc_close": 0, "sc_split": 0, "sc_share": 0.0,
         "last_date": None, "hist": [],
     }
 
@@ -388,6 +390,11 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
         # --- opponent quality (strength of schedule) ---
         "avg_opp_elo": s["opp_elo_sum"] / n if n else np.nan,
         "form_opp_elo": np.mean([h["opp_elo"] for h in form]) if form else np.nan,
+        # --- judges' scorecards (Phase 13 / 1C, adopted on the >=3-decisions
+        # slice like pre-UFC records): decision narrowness as decline signal ---
+        "sc_close": s["sc_close"] / s["sc_n"] if s["sc_n"] else np.nan,
+        "sc_split": s["sc_split"] / s["sc_n"] if s["sc_n"] else np.nan,
+        "sc_share": s["sc_share"] / s["sc_n"] if s["sc_n"] else np.nan,
         # --- absorbed-side / grappling-defense (Phase 13 / 1B) ---
         "ctrl_conceded_share": s["opp_ctrl"] / s["secs"] if s["secs"] else np.nan,
         "absorbed_body_share": s["opp_body_l"] / s["opp_sig_l"] if s["opp_sig_l"] else np.nan,
@@ -425,7 +432,8 @@ def snapshot(s, date, ph, cur_weight, today_opp, div, pre=(0, 0)):
 
 
 def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cur_weight,
-                 opp_archetype, own_exp=np.nan, opp_winpct_pre=np.nan, opp_sapm_pre=np.nan):
+                 opp_archetype, own_exp=np.nan, opp_winpct_pre=np.nan, opp_sapm_pre=np.nan,
+                 card=None):
     """Fold one completed fight into a fighter's career state."""
     if my is not None:
         s["sig_l"] += my["sig_l"]; s["sig_a"] += my["sig_a"]
@@ -471,6 +479,12 @@ def update_state(s, my, opp, date, result, method, secs, opp_elo_pre, sched5, cu
     else:  # draw
         s["draws"] += 1
         s["win_streak"] = 0; s["lose_streak"] = 0
+    if card is not None and result in (0, 1):
+        w_share, split, close = card
+        s["sc_n"] += 1
+        s["sc_close"] += close
+        s["sc_split"] += split
+        s["sc_share"] += w_share if result == 1 else 1 - w_share
     s["hist"].append({
         "win": result, "secs": secs,
         "sig_l": my["sig_l"] if my is not None else 0,
@@ -618,10 +632,21 @@ def replay(res, stats, phys, market, rng, pre_ufc=None):
         wp2 = s2["wins"] / s2["n"] if s2["n"] else np.nan
         sapm1 = s1["opp_sig_l"] / (s1["secs"] / 60) if s1["secs"] else np.nan
         sapm2 = s2["opp_sig_l"] / (s2["secs"] / 60) if s2["secs"] else np.nan
+        # judges' scorecards (Phase 13/1C): DETAILS stores loser-first /
+        # winner-second (verified vs UFC 284/293 official cards)
+        card = None
+        if "Decision" in str(r.METHOD) and res1 in (0, 1):
+            sc = SCORE_RE.findall(str(r.DETAILS))[:3]
+            if len(sc) == 3:
+                a = np.array([[int(x), int(y)] for x, y in sc], dtype=float)
+                margin = float((a[:, 1] - a[:, 0]).mean())
+                card = (float((a[:, 1] / a.sum(axis=1)).mean()),   # winner share
+                        int((a[:, 1] < a[:, 0]).any()),            # split
+                        int(margin <= 1.01))                       # close
         update_state(s1, st1, st2, r.date, res1, r.METHOD, secs, elo2_pre, sched5, weight,
-                     traits_of_2, exp1, wp2, sapm2)
+                     traits_of_2, exp1, wp2, sapm2, card)
         update_state(s2, st2, st1, r.date, 1 - res1, r.METHOD, secs, elo1_pre, sched5, weight,
-                     traits_of_1, 1 - exp1, wp1, sapm1)
+                     traits_of_1, 1 - exp1, wp1, sapm1, card)
         s1["elo"], s2["elo"] = s1_new_elo, s2_new_elo
         s1["peak_elo"] = max(s1["peak_elo"], s1_new_elo)
         s2["peak_elo"] = max(s2["peak_elo"], s2_new_elo)

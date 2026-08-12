@@ -50,7 +50,8 @@ SNAP_FEATS = ["elo", "n_fights", "win_pct", "win_streak", "lose_streak", "slpm",
               "form_finished", "form_was_finished", "avg_opp_elo", "form_opp_elo",
               "peak_elo", "elo_decline", "five_rd_fights", "weight_change",
               "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_winpct",
-              "ko_loss_rate", "sub_loss_rate", "finished_rate", "never_finished"]
+              "ko_loss_rate", "sub_loss_rate", "finished_rate", "never_finished",
+              "sc_close", "sc_split", "sc_share"]
 CONTEXT = ["title_bout", "women", "sched_rounds", "weight_lbs"]
 ANTISYM = ([f"{f}_diff" for f in SNAP_FEATS]
            + ["red_corner", "southpaw_vs_orthodox", "rank_adv", "ranked_diff"])
