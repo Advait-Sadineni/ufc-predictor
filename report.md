@@ -157,6 +157,13 @@ sub-slice basis as pre-UFC records. Face validity: Neil Magny's close-decision
 rate climbs 0.31 -> 0.38 across exactly the years the eye test said he
 declined.
 
+Adopted (Phase 13): swept XGBoost config + XGB seed bag. A 36-config random
+sweep (lr fixed 0.03, same CV folds) left LightGBM's incumbent in place (best
+challenger +0.0016, under the gate) but found XGB (depth 4, min_child_weight 5,
+subsample 0.8, colsample 0.6, lambda 5): CV 0.6504 -> 0.6477 (+0.0027, clears).
+A 5-seed XGB bag on that config added +0.0011 (variance gate +0.0005): 0.6466.
+LGB bag 5 -> 10 seeds gained only +0.0001 — kept at 5.
+
 Also rejected (Phase 13): per-fighter method fingerprint for the 6-way model —
 `ko_win_rate`/`sub_win_rate` (career finish mix) and `choke_fin_rate`/
 `ground_fin_rate` (finish mechanism parsed from non-decision DETAILS text) as

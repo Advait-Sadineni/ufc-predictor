@@ -128,10 +128,34 @@ def fit_lgb_bag(base_params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
         for s in range(BAG_SEEDS)])
 
 
-def xgb_params(depth, eta, mcw):
+def xgb_params(depth, eta, mcw, sub=0.8, col=0.8, lam=1):
     return dict(objective="binary:logistic", eval_metric="logloss", max_depth=depth,
-                eta=eta, min_child_weight=mcw, subsample=0.8, colsample_bytree=0.8,
-                seed=SEED, nthread=-1)
+                eta=eta, min_child_weight=mcw, subsample=sub, colsample_bytree=col,
+                reg_lambda=lam, seed=SEED, nthread=-1)
+
+
+XGB_BAG_SEEDS = 5  # Phase 13/2B-2: CV 0.6477 -> 0.6466 with the swept config
+
+
+class XGBBag:
+    """Average of XGB_BAG_SEEDS boosters differing only in seed."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict(self, dmat):
+        return np.mean([m.predict(dmat) for m in self.models], axis=0)
+
+    @property
+    def best_iteration(self):
+        its = [getattr(m, "best_iteration", None) for m in self.models]
+        its = [i for i in its if i]
+        return int(np.mean(its)) if its else None
+
+
+def fit_xgb_bag(base_params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
+    return XGBBag([fit_xgb(dict(base_params, seed=42 + s), X_tr, y_tr, n_rounds,
+                           X_val, y_val) for s in range(XGB_BAG_SEEDS)])
 
 
 def fit_xgb(params, X_tr, y_tr, n_rounds, X_val=None, y_val=None):
@@ -226,7 +250,11 @@ def main():
     lgb_grid = [(nl, lr, mcs) for nl in (15, 31, 63) for lr in (0.03, 0.06) for mcs in (20, 60)]
     best_lgb, (cv_lgb, iters_lgb) = tune("LightGBM", lgb_grid, lgb_params, fit_lgb, pred_lgb)
     print("Tuning XGBoost...")
-    xgb_grid = [(d, e, w) for d in (3, 5) for e in (0.03, 0.06) for w in (5, 20)]
+    # grid refreshed by the Phase 13 random sweep: (4, 0.03, 5, 0.8, 0.6, 5)
+    # beat the old incumbent by +0.0027 CV; neighbors kept for weekly retune
+    xgb_grid = [(3, 0.03, 5), (3, 0.06, 5), (3, 0.03, 20),
+                (4, 0.03, 5, 0.8, 0.6, 5), (4, 0.03, 2, 0.6, 0.8, 1),
+                (4, 0.03, 5, 0.8, 0.6, 1)]
     best_xgb, (cv_xgb, iters_xgb) = tune("XGBoost", xgb_grid, xgb_params, fit_xgb, pred_xgb)
 
     # ---------- 2. out-of-fold predictions for stack / calibration / blend ----------
@@ -238,7 +266,7 @@ def main():
         Xm, ym = mirror(tr[feats], tr["a_wins"])
         va["p_lgb"] = pred_lgb(fit_lgb_bag(lgb_params(*best_lgb), Xm, ym, 3000,
                                            va[feats], va["a_wins"]), va[feats])
-        va["p_xgb"] = pred_xgb(fit_xgb(xgb_params(*best_xgb), Xm, ym, 3000,
+        va["p_xgb"] = pred_xgb(fit_xgb_bag(xgb_params(*best_xgb), Xm, ym, 3000,
                                        va[feats], va["a_wins"]), va[feats])
         lo = make_logistic().fit(Xm, ym)
         va["p_log"] = lo.predict_proba(va[feats])[:, 1]
@@ -267,7 +295,7 @@ def main():
     print("Training final models...")
     Xm, ym = mirror(train_all[feats], train_all["a_wins"])
     final_lgb = fit_lgb_bag(lgb_params(*best_lgb), Xm, ym, iters_lgb)
-    final_xgb = fit_xgb(xgb_params(*best_xgb), Xm, ym, iters_xgb)
+    final_xgb = fit_xgb_bag(xgb_params(*best_xgb), Xm, ym, iters_xgb)
     final_log = make_logistic().fit(Xm, ym)
 
     def predict_ensemble(X):

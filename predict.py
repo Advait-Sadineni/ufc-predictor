@@ -23,8 +23,9 @@ import pandas as pd
 
 from build_features import (DATA, ensure_data, load_raw, load_market, load_pre_ufc,
                             new_state, norm_name, opp_traits, replay, snapshot, SEED)
-from train_report import (ANTISYM, CONTEXT, MODERN, SNAP_FEATS, fit_lgb, fit_lgb_bag, fit_xgb,
-                          lgb_params, logit, make_logistic, mirror, xgb_params)
+from train_report import (ANTISYM, CONTEXT, MODERN, SNAP_FEATS, fit_lgb, fit_lgb_bag,
+                          fit_xgb, fit_xgb_bag, lgb_params, logit, make_logistic,
+                          mirror, xgb_params)
 import lightgbm as lgb  # noqa: F401  (via fit_lgb)
 import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
@@ -68,7 +69,7 @@ def side_value(info, name, field):
         if t <= ft or ft <= t:
             return v
     return None
-BEST_LGB, BEST_XGB = (15, 0.06, 60), (5, 0.03, 5)  # tuned in train_report.py CV
+BEST_LGB, BEST_XGB = (15, 0.06, 60), (4, 0.03, 5, 0.8, 0.6, 5)  # tuned in train_report.py CV (Phase 13 sweep)
 
 # stats surfaced in the app's tale of the tape (what the model actually sees)
 TAPE_STATS = ["n_fights", "win_pct", "pre_ufc_winpct", "elo", "avg_opp_elo",
@@ -254,7 +255,7 @@ def train_stack(df, feats):
     tr, va = df[df["date"] < holdout_start], df[df["date"] >= holdout_start]
     X_tr, y_tr = mirror(tr[feats], tr["a_wins"])
     m_lgb = fit_lgb_bag(lgb_params(*BEST_LGB), X_tr, y_tr, 3000, va[feats], va["a_wins"])
-    m_xgb = fit_xgb(xgb_params(*BEST_XGB), X_tr, y_tr, 3000, va[feats], va["a_wins"])
+    m_xgb = fit_xgb_bag(xgb_params(*BEST_XGB), X_tr, y_tr, 3000, va[feats], va["a_wins"])
     m_log = make_logistic().fit(X_tr, y_tr)
     stacker = LogisticRegression(random_state=SEED)
     stacker.fit(np.column_stack([logit(m_lgb.predict(va[feats])),
@@ -263,7 +264,7 @@ def train_stack(df, feats):
                 va["a_wins"])
     X_all, y_all = mirror(df[feats], df["a_wins"])
     f_lgb = fit_lgb_bag(lgb_params(*BEST_LGB), X_all, y_all, m_lgb.best_iteration)
-    f_xgb = fit_xgb(xgb_params(*BEST_XGB), X_all, y_all, m_xgb.best_iteration)
+    f_xgb = fit_xgb_bag(xgb_params(*BEST_XGB), X_all, y_all, m_xgb.best_iteration)
     f_log = make_logistic().fit(X_all, y_all)
 
     def predict(X):
