@@ -120,6 +120,27 @@ glicko_rd features; CV 0.6551 vs 0.6542 baseline — Elo plus the trajectory
 features already carry the signal) and recency-weighted training (best
 tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
 
+Adopted (Phase 13): duration-aware count props. The per-fighter strike /
+takedown / knockdown models previously trained on raw full-fight counts, so
+finish-heavy fighters (short fights) had their totals systematically
+overestimated — e.g. Vicente Luque's P(over 24.5 sig strikes) was priced ~78%
+on test fights where his actual over rate was 33% (his wins are fast
+submissions). v2 trains a per-minute RATE (log-minutes init_score offset) and
+reintroduces duration as a mixture over the distance and under-2.5 heads plus
+empirical duration histograms, with a negative-binomial tail per duration atom
+and dispersion refit on duration-adjusted residuals. Test Brier (sides
+averaged): sig o24.5 0.2204 -> 0.2176, sig o49.5 0.2130 -> 0.2111, TD o0.5
+0.2253 -> 0.2195, TD o1.5 0.1698 -> 0.1688; wins the finisher subset
+(finish_rate >= 0.6) on every sig/TD line; Luque's mean P(over 24.5) drops
+78% -> 65% against a 33% actual (n=6).
+
+Also rejected (Phase 13): orientation-symmetrized prediction — averaging each
+fight's two corner views, `(p(X) + 1 − p(mirror(X)))/2`, the exact
+infinite-orientation ensemble. CV 0.6466 -> 0.6471 (one fold −0.0011): mirrored
+training already makes the model near-symmetric, so the average only shrinks
+confidence. Implication: the seed-sensitivity caveat below is not driven by
+evaluation-row orientation.
+
 Also rejected (Phase 12): quality-adjusted recent form — last-3
 over/under-performance vs Elo expectation (`form_perf_vs_exp`), recent
 opponents' pre-fight win% (`form_opp_winpct`), and opponent-adjusted striking

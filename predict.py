@@ -330,20 +330,25 @@ def main():
     sig_b = props_m["sig_fighter"](X[feats], mirrored=True)
     kd_a = props_m["kd_fighter"](X[feats])
     kd_b = props_m["kd_fighter"](X[feats], mirrored=True)
-    DISP = props_m["dispersion"]
     p_u25s = (props_m["under25"](X[feats]) if props_m["under25"] is not None
               else np.full(len(X), np.nan))
     contribs = f_lgb.predict(X[feats], pred_contrib=True)[:, :-1]  # drop bias col
     book = fetch_books(refresh)
 
-    from scipy.stats import nbinom as _nb, poisson as _pois
+    # over-probabilities via the duration-aware mixture (Phase 13 / 2A):
+    # per-minute rate x fight-duration distribution, NB tail per duration atom
+    CO = props_m["count_over"]
+    over_p = {}
+    for kind, lines in (("td", (0.5, 1.5, 2.5)), ("sig", (24.5, 49.5, 74.5)),
+                        ("kd", (0.5,))):
+        for line in lines:
+            for s, mirrored in (("a", False), ("b", True)):
+                v = CO(X[feats], kind, line, mirrored=mirrored)
+                over_p[(kind, s, line)] = v
 
-    def p_over(mu, line, r):
-        """P(count > line). Negative binomial — fight-stat counts are heavily
-        overdispersed, so Poisson badly miscalibrates these markets."""
-        if r:
-            return float(1 - _nb.cdf(np.floor(line), r, r / (r + mu)))
-        return float(1 - _pois.cdf(np.floor(line), mu))
+    def p_over(kind, s, line, i):
+        v = over_p[(kind, s, line)]
+        return round(float(v[i]), 4) if v is not None else np.nan
 
     saved, edges = [], []
     def pre_ufc(pro, ufc_rec):
@@ -355,9 +360,9 @@ def main():
         except (ValueError, AttributeError, IndexError):
             return ""
 
-    for (n1, n2, abbrev, frow, nf1, nf2, rec1, rec2, pro1, pro2), p, p6, td, cb, pdm, pu, counts in zip(
+    for i, ((n1, n2, abbrev, frow, nf1, nf2, rec1, rec2, pro1, pro2), p, p6, td, cb, pdm, pu, counts) in enumerate(zip(
             brows, probs, P6, exp_td, contribs, p_dists, p_u25s,
-            zip(td_a, td_b, sig_a, sig_b, kd_a, kd_b)):
+            zip(td_a, td_b, sig_a, sig_b, kd_a, kd_b))):
         pick, pp = (n1, p) if p >= 0.5 else (n2, 1 - p)
         # method split for the picked side, renormalized to its win probability
         side = p6[:3] if p >= 0.5 else p6[3:]
@@ -381,12 +386,12 @@ def main():
                       "td_a": round(float(counts[0]), 2), "td_b": round(float(counts[1]), 2),
                       "sig_a": round(float(counts[2]), 1), "sig_b": round(float(counts[3]), 1),
                       "kd_a": round(float(counts[4]), 2), "kd_b": round(float(counts[5]), 2),
-                      **{f"td_{s}_o{int(l*10)}": round(p_over(v, l, DISP["td"]), 4)
-                         for s, v in (("a", counts[0]), ("b", counts[1])) for l in (0.5, 1.5, 2.5)},
-                      **{f"sig_{s}_o{int(l)}": round(p_over(v, l, DISP["sig"]), 4)
-                         for s, v in (("a", counts[2]), ("b", counts[3])) for l in (24.5, 49.5, 74.5)},
-                      **{f"kd_{s}_o5": round(p_over(v, 0.5, DISP["kd"]), 4)
-                         for s, v in (("a", counts[4]), ("b", counts[5]))},
+                      **{f"td_{s}_o{int(l*10)}": p_over("td", s, l, i)
+                         for s in ("a", "b") for l in (0.5, 1.5, 2.5)},
+                      **{f"sig_{s}_o{int(l)}": p_over("sig", s, l, i)
+                         for s in ("a", "b") for l in (24.5, 49.5, 74.5)},
+                      **{f"kd_{s}_o5": p_over("kd", s, 0.5, i)
+                         for s in ("a", "b")},
                       "p_dist_model": round(float(pdm), 4),
                       "p_u25": (round(float(pu), 4)
                                 if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)

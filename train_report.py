@@ -65,11 +65,22 @@ def load():
     return df, feats
 
 
-def mirror(X: pd.DataFrame, y: pd.Series):
-    """Append the swapped-corner view of every fight (antisymmetric cols negate)."""
+def mirror_X(X: pd.DataFrame):
+    """The swapped-corner view of every row (antisymmetric cols negate)."""
     Xm = X.copy()
     Xm[ANTISYM] = -Xm[ANTISYM]
-    return pd.concat([X, Xm], ignore_index=True), pd.concat([y, 1 - y], ignore_index=True)
+    return Xm
+
+
+def mirror(X: pd.DataFrame, y: pd.Series):
+    """Append the swapped-corner view of every fight (antisymmetric cols negate)."""
+    return (pd.concat([X, mirror_X(X)], ignore_index=True),
+            pd.concat([y, 1 - y], ignore_index=True))
+
+
+# Phase 13 note: orientation-symmetrized prediction ((p(X) + 1 - p(mirror_X(X)))/2)
+# was tested and REJECTED — CV 0.6466 -> 0.6471; mirrored training already makes
+# the model near-symmetric, so averaging only shrinks confidence. See report.md.
 
 
 def lgb_params(num_leaves, lr, mcs):
@@ -339,6 +350,22 @@ def main():
     td_mae = np.abs(props_m["total_td"](tt[feats]) - tt["total_td"]).mean()
     td_mae_base = np.abs(train_all["total_td"].mean() - tt["total_td"]).mean()
 
+    # duration-aware count props (Phase 13): over-line Brier, sides averaged
+    count_lines = ""
+    tc = test.dropna(subset=["sig_landed_a", "sig_landed_b", "td_landed_a",
+                             "td_landed_b", "fight_secs"])
+    for kind, line, col_a, col_b in (("sig", 24.5, "sig_landed_a", "sig_landed_b"),
+                                     ("td", 0.5, "td_landed_a", "td_landed_b")):
+        pv = props_m["count_over"](tc[feats], kind, line)
+        pv_b = props_m["count_over"](tc[feats], kind, line, mirrored=True)
+        if pv is None:
+            continue
+        b = np.mean([brier_score_loss((tc[col_a] > line).astype(int), pv),
+                     brier_score_loss((tc[col_b] > line).astype(int), pv_b)])
+        base_p = ((tc[col_a] > line).mean() + (tc[col_b] > line).mean()) / 2
+        count_lines += (f"| Fighter {kind} over {line} — Brier (duration-aware) "
+                        f"| {b:.3f} | {base_p * (1 - base_p):.3f} (base rate) |\n")
+
     # ---------- 5. permutation importance (full ensemble, log-loss increase) ----------
     print("Computing permutation importance (ensemble)...")
     rng = np.random.default_rng(SEED)
@@ -454,7 +481,7 @@ the training-set class frequencies:
 | 6-way outcome top-1 accuracy | {acc6:.3f} | {acc6_base:.3f} |
 | Goes the distance — Brier (dedicated model) | {dist_brier:.3f} | {dist_brier_6c:.3f} (6-way-derived) |
 | Goes the distance — accuracy | {dist_acc:.3f} | {dist_base:.3f} (majority class) |
-{u25_line}| Total takedowns — MAE | {td_mae:.2f} | {td_mae_base:.2f} (train mean) |
+{u25_line}{count_lines}| Total takedowns — MAE | {td_mae:.2f} | {td_mae_base:.2f} (train mean) |
 
 Method-of-victory and distance predictions beat the frequency baselines but,
 as with the winner model, should be assumed weaker than prop-market prices —
