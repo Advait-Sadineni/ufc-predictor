@@ -3,3 +3,6 @@ id,date,event,pick,odds,stake,result,close,tag
 2,2026-08-06,UFC Fight Night 2026-08-08,4-leg: + Sutherland-Montanha no-distance,465.0,36.0,W,,model
 3,2026-08-06,UFC Fight Night 2026-08-08,5-leg: + Asplund by KO/TKO or Decision (DC),666.0,50.0,W,,model
 4,2026-08-10,UFC 330 2026-08-15,BOOSTED 4-leg: Makhachev + Johnson + Fernandes + Luque (25% boost),935.0,10.0,,,model
+5,2026-08-12,UFC 330 2026-08-15,MAIN 3-leg: Makhachev ML -350 + D.Johnson ML -265 + Fernandes ML +138,320.0,100.0,,,model
+6,2026-08-12,UFC 330 2026-08-15,SIDE 3-leg: Makhachev by DEC +135 + Fernandes ML +138 + Johnson/McConico o2.5 +128,1175.0,24.0,,,model
+7,2026-08-12,UFC 330 2026-08-15,BONUS $50 FREE BET 4-leg: D.Johnson ML -265 + Fernandes ML +138 + Luque ML +100 + Makhachev by DEC +135 (profit-only ~$720),1440.0,0.0,,,model
