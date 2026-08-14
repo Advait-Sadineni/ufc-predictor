@@ -49,7 +49,14 @@ SNAP_FEATS = ["elo", "n_fights", "win_pct", "win_streak", "lose_streak", "slpm",
               "form_win", "form_slpm", "form_sapm", "form_td15",
               "form_finished", "form_was_finished", "avg_opp_elo", "form_opp_elo",
               "peak_elo", "elo_decline", "five_rd_fights", "weight_change",
-              "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_winpct",
+              # pre_ufc_* REMOVED (leakage audit 2026-08-13): pre_ufc = ESPN pro
+              # record NOW minus UFC record NOW, so any non-UFC fight AFTER a row's
+              # date leaks in (Kevin Lee 9-1 vs true 8-1; Ngannou 7-1 vs 5-1). No
+              # point-in-time source exists (ESPN's API returns current records
+              # even for historical dates), so the only clean backtest value is
+              # none at all. Live picks could still use it legitimately — the
+              # value IS knowable at prediction time — but its validated gain
+              # cannot be trusted. See audit/leakage-audit-2026-08-13.md.
               "ko_loss_rate", "sub_loss_rate", "finished_rate", "never_finished",
               "sc_close", "sc_split", "sc_share"]
 CONTEXT = ["title_bout", "women", "sched_rounds", "weight_lbs"]
