@@ -89,8 +89,10 @@ low-experience slice):
 
 Same protocol, same seed (42), same features.csv; only `SNAP_FEATS` changed
 (−4 base features → −8 model columns, 102 remain). Full `train_report.py` rerun
-including hyperparameter retune. Artifacts: report.md + rerun_leakfix.log on
-branch `leakage-fixes`.
+including hyperparameter retune. Artifact: report.md on branch `leakage-fixes`
+(rerun_leakfix.log kept locally; *.log is gitignored). Prop models retrained on
+the same reduced feature set and barely moved (6-way LL 1.596 → 1.592, count-prop
+Briers equal or better) — pre_ufc carried ~nothing for props.
 
 | Metric | Before (leaked) | After (leak-free) | Δ |
 |---|---|---|---|

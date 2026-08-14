@@ -171,6 +171,6 @@ tau=5y improved CV by only 0.0017, under the pre-registered 0.002 gate).
   matched; the rest get 0-0. Elo still starts at 1500 on UFC debut.
 - Odds are closing odds from the Ultimate UFC Dataset (1182/1614
   test fights matched); fights without odds are excluded only from market rows.
-- Rankings exist only for ranked fighters from 2021 onward; missing values are
-  left as NaN for the tree models.
+- Rankings exist only for ranked fighters and only from 2013 (when UFC rankings
+  began); missing values are left as NaN for the tree models.
 - Fight time is approximated with 5-minute rounds (exact for the modern era).
