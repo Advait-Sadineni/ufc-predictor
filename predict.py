@@ -69,7 +69,7 @@ def side_value(info, name, field):
         if t <= ft or ft <= t:
             return v
     return None
-BEST_LGB, BEST_XGB = (15, 0.06, 60), (4, 0.03, 5, 0.8, 0.6, 5)  # tuned in train_report.py CV (Phase 13 sweep)
+BEST_LGB, BEST_XGB = (31, 0.03, 20), (4, 0.03, 5, 0.8, 0.6, 1)  # retuned in train_report.py CV after pre_ufc_* removal (leakage audit 2026-08-13)
 
 # stats surfaced in the app's tale of the tape (what the model actually sees)
 TAPE_STATS = ["n_fights", "win_pct", "pre_ufc_winpct", "elo", "avg_opp_elo",

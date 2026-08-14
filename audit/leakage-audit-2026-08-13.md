@@ -87,4 +87,51 @@ low-experience slice):
 
 ## Results (after rerun)
 
-_(appended after train_report.py completes on branch leakage-fixes)_
+Same protocol, same seed (42), same features.csv; only `SNAP_FEATS` changed
+(−4 base features → −8 model columns, 102 remain). Full `train_report.py` rerun
+including hyperparameter retune. Artifacts: report.md + rerun_leakfix.log on
+branch `leakage-fixes`.
+
+| Metric | Before (leaked) | After (leak-free) | Δ |
+|---|---|---|---|
+| CV log loss (LGB best) | 0.6468 | 0.6536 | **+0.0068 worse** |
+| Full test (n=1614): accuracy | 0.644 | 0.629 | −0.015 |
+| Full test: log loss | 0.637 | 0.641 | +0.004 worse |
+| Full test: Brier | 0.223 | 0.225 | +0.002 worse |
+| Odds subset (n=1182): ensemble accuracy | 0.654 | 0.640 | −0.014 |
+| Odds subset: ensemble log loss | 0.628 | 0.631 | +0.003 worse |
+| Odds subset: ensemble Brier | 0.219 | 0.220 | +0.001 worse |
+| Market (unchanged benchmark) | 0.702 / 0.582 / 0.199 | same | — |
+| Blend: log loss | 0.577 | 0.577 | 0.000 |
+| Blend better than market (10k paired bootstrap) | 97.0%, CI [−0.0002, +0.0101] | **98.7%, CI [+0.0006, +0.0093]** | CI now excludes 0 |
+| Blend model coefficient | +0.357 | +0.295 | model weighted less |
+| Tuned LGB / XGB | (15,.06,20) / (…,λ5) | (31,.03,20) / (…,λ1) | retuned |
+
+**The drop is real and this is the success condition.** The model's standalone
+backtest was leak-inflated: honest numbers are 0.629 acc / 0.641 LL (full test)
+and 0.640 / 0.631 on the odds subset — not 0.644 / 0.637 and 0.654 / 0.628.
+
+**Expectations vs actual (pre-registered above):**
+1. Full-test LL +0.004 — at the top of the predicted +0.001..+0.004 range. HIT.
+   Accuracy 0.629 — BELOW the predicted 0.639-0.645 floor; the leak was worth
+   more accuracy than permutation importance suggested (permuting one column
+   understates a 4-column correlated group).
+2. Odds-subset LL 0.631 — inside predicted 0.629-0.632. HIT. Accuracy 0.640 —
+   below the predicted floor 0.646. MISS, same direction.
+3. Blend 0.577, finding survives — HIT. But the resample share went UP
+   (97.0% → 98.7%, CI now excludes zero) instead of the predicted drop — the
+   contaminated features made the MODEL look better standalone while adding
+   noise to what it contributed beyond the market. Within the documented
+   95-99% seed-sensitivity band, so treat as "unchanged-to-slightly-stronger."
+4. Tuned configs changed (predicted unchanged) — MISS, minor.
+5. Top-3 importance became age_diff, red_corner, elo_diff — HIT.
+
+**Note on Phase 10:** the adoption measured +0.0014 CV at adoption time, but
+removal now costs 0.0068 CV — the feature's influence grew through later
+config changes (Phase 13 sweep tuned WITH the leak in). CV cost ≠ honest value:
+part of that 0.0068 is the model re-learning around a contaminated column it
+had leaned on. The test-set numbers above are the honest measure.
+
+**Verdict: blend-beats-market SURVIVES the audit** (0.577 vs 0.582, 98.7% of
+resamples, CI excludes zero). The standalone-model headline does not — use
+0.629 / 0.641 going forward. Merging this branch is Advait's call.
