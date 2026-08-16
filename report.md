@@ -10,22 +10,22 @@ striking/grappling rates, strike-target and position mixes, recent-form windows
 decline, layoffs, weight-class changes), rankings, and physical attributes.
 
 **Split:** train ≤ 2023-06-03 (6650 fights), test after
-(1614 fights). LightGBM (best (15, 0.06, 20), cv 0.6468) and XGBoost
-(best (4, 0.03, 5, 0.8, 0.6, 5), cv 0.6477) tuned with 4-fold expanding-window CV inside
+(1614 fights). LightGBM (best (31, 0.03, 20), cv 0.6536) and XGBoost
+(best (4, 0.03, 2, 0.6, 0.8, 1), cv 0.6564) tuned with 4-fold expanding-window CV inside
 the train period. The stacking combiner, isotonic calibrator, and market blend
 were all fitted on out-of-fold CV predictions only. The LightGBM component
 is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
-(LGB, XGB, logistic): [0.45, 0.4, 0.06].
+(LGB, XGB, logistic): [0.53, 0.19, 0.16].
 
 ## Model comparison — full test set (1614 fights)
 
 | Predictor | n | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|---|
-| Stacked ensemble (LGB+XGB+logistic) | 1614 | 0.644 | 0.637 | 0.223 | 0.029 |
-| Ensemble + isotonic | 1614 | 0.636 | 0.642 | 0.224 | 0.033 |
-| LightGBM | 1614 | 0.642 | 0.639 | 0.224 | 0.036 |
-| XGBoost | 1614 | 0.646 | 0.637 | 0.223 | 0.031 |
-| Logistic regression (full features) | 1614 | 0.612 | 0.647 | 0.228 | 0.053 |
+| Stacked ensemble (LGB+XGB+logistic) | 1614 | 0.631 | 0.641 | 0.225 | 0.023 |
+| Ensemble + isotonic | 1614 | 0.633 | 0.644 | 0.226 | 0.027 |
+| LightGBM | 1614 | 0.628 | 0.643 | 0.225 | 0.031 |
+| XGBoost | 1614 | 0.633 | 0.642 | 0.225 | 0.039 |
+| Logistic regression (full features) | 1614 | 0.613 | 0.648 | 0.229 | 0.052 |
 | Elo only (logistic) | 1614 | 0.569 | 0.674 | 0.241 | 0.050 |
 
 ## The real benchmark — vig-removed closing odds (1182 test fights with odds)
@@ -33,16 +33,16 @@ is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
 | Predictor | n | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|---|
 | Market (no-vig closing odds) | 1182 | 0.702 | 0.582 | 0.199 | 0.033 |
-| Stacked ensemble | 1182 | 0.654 | 0.628 | 0.219 | 0.046 |
-| Blend: market + model | 1182 | 0.704 | 0.577 | 0.197 | 0.027 | logit blend, model coef=+0.357
+| Stacked ensemble | 1182 | 0.644 | 0.631 | 0.220 | 0.029 |
+| Blend: market + model | 1182 | 0.704 | 0.577 | 0.197 | 0.025 | logit blend, model coef=+0.294
 
-**Does the model beat the market?** No. The market's log loss (0.582) beats the model's (0.628).
+**Does the model beat the market?** No. The market's log loss (0.582) beats the model's (0.631).
 
-**Does the model add information beyond the market?** Not conclusively —
+**Does the model add information beyond the market?** Yes —
 blending model with market gives log loss 0.577 vs 0.582 for the
 market alone. Paired bootstrap on the log-loss difference (market − blend,
-10,000 resamples): 95% CI [-0.0002, +0.0101], blend better in
-97.0% of resamples.
+10,000 resamples): 95% CI [+0.0006, +0.0092], blend better in
+98.7% of resamples.
 
 This is the expected result for public pre-fight data: closing odds aggregate
 sharp bettors' information (injuries, camp changes, weight-cut issues, insider
@@ -57,15 +57,15 @@ the training-set class frequencies:
 
 | Target | Model | Baseline |
 |---|---|---|
-| 6-way outcome log loss | 1.596 | 1.713 (freq) — per-class isotonic REJECTED (1.966) |
-| 6-way LL, method-odds subset (n=1105) — model / blend w=0.8 | 1.529 | 1.586 (model alone) |
-| 6-way outcome top-1 accuracy | 0.344 | 0.242 |
-| Goes the distance — Brier (dedicated model) | 0.242 | 0.234 (6-way-derived) |
-| Goes the distance — accuracy | 0.593 | 0.503 (majority class) |
-| Under 2.5 rounds (3R fights) — Brier | 0.235 | 0.248 (predict base rate) |
+| 6-way outcome log loss | 1.592 | 1.713 (freq) — per-class isotonic REJECTED (2.041) |
+| 6-way LL, method-odds subset (n=1105) — model / blend w=0.8 | 1.527 | 1.582 (model alone) |
+| 6-way outcome top-1 accuracy | 0.345 | 0.242 |
+| Goes the distance — Brier (dedicated model) | 0.238 | 0.233 (6-way-derived) |
+| Goes the distance — accuracy | 0.600 | 0.503 (majority class) |
+| Under 2.5 rounds (3R fights) — Brier | 0.241 | 0.248 (predict base rate) |
 | Fighter sig over 24.5 — Brier (duration-aware) | 0.218 | 0.232 (base rate) |
-| Fighter td over 0.5 — Brier (duration-aware) | 0.221 | 0.245 (base rate) |
-| Total takedowns — MAE | 1.68 | 1.81 (train mean) |
+| Fighter td over 0.5 — Brier (duration-aware) | 0.219 | 0.245 (base rate) |
+| Total takedowns — MAE | 1.67 | 1.81 (train mean) |
 
 Method-of-victory and distance predictions beat the frequency baselines but,
 as with the winner model, should be assumed weaker than prop-market prices —
@@ -75,7 +75,7 @@ and prop markets carry roughly twice the vig of moneylines.
 
 ![Reliability diagram](plots/reliability.png)
 
-ECE (10 equal-count bins): model 0.046, market 0.033.
+ECE (10 equal-count bins): model 0.029, market 0.033.
 Isotonic calibration is reported for completeness; the raw ensemble is already
 close to calibrated.
 
@@ -86,16 +86,16 @@ close to calibrated.
 Top 10 by permutation importance (mean log-loss increase over 3 shuffles,
 through the full ensemble):
 
-- `age_diff`: +0.0286
-- `red_corner`: +0.0221
-- `pre_ufc_winpct_diff`: +0.0036
-- `form_sapm_diff`: +0.0035
+- `age_diff`: +0.0310
+- `red_corner`: +0.0290
 - `elo_diff`: +0.0031
-- `elo_decline_diff`: +0.0022
-- `n_fights_diff`: +0.0018
-- `layoff_days_diff`: +0.0014
-- `form_opp_elo_diff`: +0.0012
-- `absorbed_head_share_diff`: +0.0011
+- `form_sapm_diff`: +0.0029
+- `n_fights_diff`: +0.0027
+- `elo_decline_diff`: +0.0019
+- `sapm_diff`: +0.0018
+- `absorbed_head_share_diff`: +0.0014
+- `td_avg_diff`: +0.0010
+- `form_opp_elo_diff`: +0.0009
 
 ## Negative results (tried and rejected)
 
