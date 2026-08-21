@@ -4,18 +4,20 @@ Pipeline (all fitting strictly walk-forward, seeds fixed at 42):
 1. load() reads epl/data/features.csv (built by build_features.py; rebuilt
    automatically if missing) and derives no-vig market probs via
    demo.market_probs (Pinnacle closing preferred).
-2. dc_predict_seasons() fits a time-decayed Dixon-Coles model per league per
-   evaluated season — two-stage: weighted Poisson GLM (sklearn
+2. dc_predict_seasons() fits a time-decayed Dixon-Coles model per league,
+   refit every 30 days walk-forward (protocol v2 — deployment-realistic
+   freshness for every model row) — two-stage: weighted Poisson GLM (sklearn
    PoissonRegressor on attack/defence one-hots + home flag, exp decay with
-   half-life chosen from {180, 365, 730} days by CV RPS inside the train
+   half-life chosen from {365, 730} days by CV RPS inside the train
    period only) then the low-score correlation rho by 1-D weighted MLE.
    Score grid 0..10 gives 1X2, over/under 2.5 and BTTS probabilities.
    Unseen (promoted) teams get the mean parameters of the 5 weakest fitted
    teams. This two-stage fit is a standard practical approximation to the
    joint DC MLE, chosen for speed; rho is conditional on the GLM rates.
 3. lgb_oof() trains LightGBM 3-way on the replay features, expanding-window
-   by season for out-of-fold predictions on 2018-19..2023-24, one final model
-   on everything before 2024-07-01 for the holdout.
+   by season for out-of-fold predictions on 2018-19..2023-24, and retrained
+   at each holdout season boundary (protocol v2) — the 2025-26 model sees
+   2024-25, exactly as a weekly deployment would.
 4. Stacking discipline (locked): the logistic combiner is fit on OOF
    first-stage predictions from 2018-19..2021-22 ONLY; the market+model
    logit blend is fit on 2022-23..2023-24, where the stack itself is
@@ -28,9 +30,9 @@ Pipeline (all fitting strictly walk-forward, seeds fixed at 42):
 Not established: this model is NOT expected to beat the closing line — the
 closes are the benchmark and matching their calibration is the bar. BTTS has
 no market odds in football-data, so its Brier is only compared to the train
-base rate. The DC fit window is capped at 6 years and refit once per season,
-not per week, so late-season parameter drift is absorbed by the LGB side and
-the blend, not by DC itself.
+base rate. The DC fit window is capped at 6 years; the 30-day refit cadence
+still lags the market's match-by-match information, deliberately — anything
+fresher than the last completed round adds nothing for pre-match features.
 
 Run: python epl/train_report.py
 """
@@ -52,8 +54,9 @@ CV_SEASONS = ["1819", "1920", "2021", "2122", "2223", "2324"]
 STACK_SEASONS = CV_SEASONS[:4]           # combiner fit here (first-stage preds are OOF)
 BLEND_SEASONS = CV_SEASONS[4:]           # blend fit here (stack itself is OOF)
 HOLDOUT_SEASONS = ["2425", "2526"]
-HALF_LIVES = [180, 365, 730]             # days; chosen by CV RPS inside train only
+HALF_LIVES = [365, 730]                  # days; chosen by CV RPS inside train only
 DC_WINDOW_YEARS = 6
+DC_REFIT_DAYS = 30                       # protocol v2: refit goal model per 30-day block
 GOAL_GRID = 11                           # score matrix 0..10 goals
 OU_CHAINS = [("PC>2.5", "PC<2.5"), ("B365C>2.5", "B365C<2.5"),
              ("P>2.5", "P<2.5"), ("B365>2.5", "B365<2.5")]
@@ -79,6 +82,13 @@ EXPERIMENTS = [                            # adopt-or-REJECT ledger (epl/experim
     "99.3% via fetch_understat.py) — REJECT (0.20399, -0.00023 < gate; the "
     "shots/SoT rolling rates already carry the signal). Columns stay "
     "computed in features.csv, excluded from the model.",
+    "2026-08-21 PROTOCOL v2 (adopted a priori as deployment realism, not "
+    "gated on outcomes): DC refit per 30-day block (was once/season), LGB "
+    "retrained at holdout season boundaries, half-life re-chosen on CV "
+    "(365d under v2). v1 -> v2 holdout: DC 0.2058 -> 0.2019, LGB 0.2032 -> "
+    "0.2028, stack 0.2019 -> 0.2010 (market 0.1956); O/U 2.5 Brier 0.2445 "
+    "-> 0.2440, BTTS 0.2488 -> 0.2478. Freshness fixed DC's 1X2; the "
+    "remaining goals-market gap is model quality, not staleness.",
 ]
 
 
@@ -170,20 +180,23 @@ def fit_dc_league(rows, cutoff, half_life):
 
 
 def dc_predict_seasons(df, seasons, half_life):
-    """Walk-forward DC predictions for the given seasons; arrays aligned to df."""
+    """Walk-forward DC predictions, refit per DC_REFIT_DAYS block (protocol v2)."""
     p1x2 = np.full((len(df), 3), np.nan)
     ou = np.full(len(df), np.nan)
     btts = np.full(len(df), np.nan)
     for s in seasons:
-        cutoff = season_cutoff(s)
-        lo = cutoff - pd.DateOffset(years=DC_WINDOW_YEARS)
-        for div, sub in df[df["season"] == s].groupby("Div"):
+        start = season_cutoff(s)
+        sdf = df[df["season"] == s]
+        block = ((sdf["Date"] - start).dt.days // DC_REFIT_DAYS).clip(lower=0)
+        for (div, b), sub in sdf.groupby([sdf["Div"], block]):
+            cutoff = start + pd.Timedelta(days=DC_REFIT_DAYS * int(b))
+            lo = cutoff - pd.DateOffset(years=DC_WINDOW_YEARS)
             train = df[(df["Div"] == div) & (df["Date"] < cutoff) & (df["Date"] >= lo)]
             predict = fit_dc_league(train, cutoff, half_life)
-            p, o, b = predict(sub["HomeTeam"].tolist(), sub["AwayTeam"].tolist())
+            p, o, bt = predict(sub["HomeTeam"].tolist(), sub["AwayTeam"].tolist())
             p1x2[sub.index] = p
             ou[sub.index] = o
-            btts[sub.index] = b
+            btts[sub.index] = bt
     return p1x2, ou, btts
 
 
@@ -197,11 +210,12 @@ def lgb_oof(df, feat_cols):
         model = LGBMClassifier(**LGB_PARAMS)
         model.fit(tr[feat_cols], tr["y"])
         probs[va.index] = model.predict_proba(va[feat_cols])
-    tr = df[df["Date"] < HOLDOUT_START]
-    ho = df[df["Date"] >= HOLDOUT_START]
-    model = LGBMClassifier(**LGB_PARAMS)
-    model.fit(tr[feat_cols], tr["y"])
-    probs[ho.index] = model.predict_proba(ho[feat_cols])
+    for s in HOLDOUT_SEASONS:              # protocol v2: retrain at each holdout season boundary
+        tr = df[df["Date"] < season_cutoff(s)]
+        ho = df[df["season"] == s]
+        model = LGBMClassifier(**LGB_PARAMS)
+        model.fit(tr[feat_cols], tr["y"])
+        probs[ho.index] = model.predict_proba(ho[feat_cols])
     return probs
 
 
@@ -322,6 +336,9 @@ def main():
         f"chosen on CV = {best_hl}d (CV RPS by candidate: "
         + ", ".join(f"{h}d={r:.4f}" for h, r in hl_rps.items())
         + " — evaluated inside train only).",
+        f"- Protocol v2 (walk-forward): goal model refit every {DC_REFIT_DAYS} "
+        "days; LGB retrained at each holdout season boundary. Applied "
+        "identically to every model row; combiner fitting unchanged.",
         f"- Stack combiner fit on OOF predictions, seasons {STACK_SEASONS}.",
         f"- Blend weight fit on seasons {BLEND_SEASONS} (stack out-of-sample there).",
         f"- Holdout: seasons 2024-25 + 2025-26, {ev.sum()} matches with 1X2 closing "

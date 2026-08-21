@@ -36,6 +36,28 @@ way. Experiments:
      priors, not future match outcomes (named per locked rule 7).
      OUTCOME: REJECT (0.20399, -0.00023 < gate).
 
+Phase 3 (protocol v2 — walk-forward: DC refit per 30d block, LGB retrained
+at holdout season boundaries; adopted a priori as deployment realism, not
+gated). New experiments, same discipline:
+  H. (pre-registered 2026-08-21 before running) LGB-Poisson goals family:
+     two LGBMRegressor(objective=poisson) on the replay features predicting
+     home/away goals, expanding-window by season; rho estimated per fold on
+     train rows (1 parameter, in-sample — named simplification); DC-style
+     score grid -> 1X2/OU/BTTS. Gate: stack-of-3 (DC+LGB+Poisson) vs
+     stack-of-2 (DC+LGB), both combiners fit on STACK_SEASONS OOF, RPS
+     improvement >= 0.0005 measured on BLEND_SEASONS where both stacks are
+     out-of-sample. Also recorded (informational, pre-declared): Poisson
+     family's CV OU-2.5 and BTTS Brier vs DC's — if better, it becomes the
+     goals-market source in the report regardless of the stack verdict.
+  I. (pre-registered, run after H settles) deep history 0001..1011 added as
+     training rows only; gate: baseline LGB CV RPS improvement >= 0.0005.
+  J. (pre-registered, after I) Elo grid K{12,20,28} x HA{40,60,80} x margin
+     exponent {0.5,0.8} in the replay; gate: >= 0.0005 vs running baseline.
+  K. (pre-registered, after J) 5-seed LGB bag (seeds 42..46, mean probs);
+     gate: >= 0.0005 vs running baseline.
+  L. (pre-registered, after K) draw-geometry features |elo_diff|,
+     |h_ppg5-a_ppg5|, h_ga5+a_ga5; gate: >= 0.0005 vs running baseline.
+
 This is a one-off experiment harness, not part of the pipeline: adopted
 changes get hardcoded into train_report.py and this script is only evidence.
 It reuses train_report's loaders so the fold scheme cannot drift. Results
