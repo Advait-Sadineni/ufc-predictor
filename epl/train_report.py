@@ -75,6 +75,10 @@ EXPERIMENTS = [                            # adopt-or-REJECT ledger (epl/experim
     "blend seasons where stack is out-of-sample — REJECT (raw 0.19956 vs "
     "calibrated 0.19973, -0.00016; the logistic combiner is already "
     "calibrated)",
+    "2026-08-21 G understat rolling xG for/against last-5/10 (join rate "
+    "99.3% via fetch_understat.py) — REJECT (0.20399, -0.00023 < gate; the "
+    "shots/SoT rolling rates already carry the signal). Columns stay "
+    "computed in features.csv, excluded from the model.",
 ]
 
 
@@ -245,7 +249,10 @@ def ou_market(df):
 def main():
     df = load()
     y = df["y"].to_numpy()
-    feat_cols = ["elo_diff"] + [c for c in df.columns if c.startswith(("h_", "a_"))]
+    rejected = {f"{p}xg{d}{w}" for p in ("h_", "a_") for d in ("f", "a")
+                for w in (5, 10)}          # REJECTED 2026-08-21 (-0.00023 < gate), kept in CSV
+    feat_cols = ["elo_diff"] + [c for c in df.columns
+                                if c.startswith(("h_", "a_")) and c not in rejected]
     mkt, mkt_src = demo.market_probs(df)
     cv_mask = df["season"].isin(CV_SEASONS).to_numpy()
     ho_mask = df["season"].isin(HOLDOUT_SEASONS).to_numpy()

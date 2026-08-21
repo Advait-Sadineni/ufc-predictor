@@ -25,6 +25,16 @@ way. Experiments:
      BLEND_SEASONS where both stack and calibrator are out-of-sample).
      Metric: RPS on BLEND_SEASONS, calibrated stack vs raw stack; same
      >= 0.0005 gate. Draws are the known calibration crux, hence the try.
+     OUTCOME: REJECT (raw 0.19956 vs calibrated 0.19973, -0.00016).
+  G. (pre-registered 2026-08-21 before running) understat rolling xG:
+     merge per-match xG (fetch_understat.py, join rate 99.3%), replay
+     last-5/last-10 nanmean xG for/against per team (emit-before-append,
+     same leak discipline), 8 new columns h_/a_xgf5/xga5/xgf10/xga10 added
+     to the baseline LGB. Same metric (OOF CV RPS over the six CV seasons)
+     and same >= 0.0005 gate vs the same baseline. xG caveat: understat
+     scores all history with its current model — leaks shot-conversion
+     priors, not future match outcomes (named per locked rule 7).
+     OUTCOME: REJECT (0.20399, -0.00023 < gate).
 
 This is a one-off experiment harness, not part of the pipeline: adopted
 changes get hardcoded into train_report.py and this script is only evidence.
@@ -78,6 +88,33 @@ def main():
 
     base = lgb_cv_rps(df, base_cols, tr.LGB_PARAMS)
     print(f"baseline LGB CV RPS: {base:.5f}")
+
+    if "G" in sys.argv[1:]:
+        from collections import defaultdict, deque
+        xg = pd.read_csv(demo.DATA / "understat_matches.csv", parse_dates=["Date"])
+        df_g = df.merge(xg, on=["Div", "Date", "HomeTeam", "AwayTeam"], how="left")
+        hist = defaultdict(lambda: deque(maxlen=10))
+        rows = []
+        for m in df_g.itertuples():
+            feat = {}
+            for p, team in (("h_", m.HomeTeam), ("a_", m.AwayTeam)):
+                past = hist[team]
+                for w in (5, 10):
+                    if len(past) >= w:
+                        arr = np.array(list(past)[-w:], float)
+                        feat[f"{p}xgf{w}"], feat[f"{p}xga{w}"] = np.nanmean(arr, 0)
+                    else:
+                        feat[f"{p}xgf{w}"] = feat[f"{p}xga{w}"] = np.nan
+            rows.append(feat)
+            if np.isfinite(m.xg_h) and np.isfinite(m.xg_a):
+                hist[m.HomeTeam].append((m.xg_h, m.xg_a))
+                hist[m.AwayTeam].append((m.xg_a, m.xg_h))
+        xg_feats = pd.DataFrame(rows, index=df_g.index)
+        df_g = pd.concat([df_g, xg_feats], axis=1)
+        rps_g = lgb_cv_rps(df_g, base_cols + list(xg_feats.columns), tr.LGB_PARAMS)
+        print(f"G understat rolling xG: {rps_g:.5f} (delta {base - rps_g:+.5f}) -> "
+              f"{'ADOPT' if base - rps_g >= GATE else 'REJECT'}")
+        return
 
     if "F" in sys.argv[1:]:
         from sklearn.isotonic import IsotonicRegression

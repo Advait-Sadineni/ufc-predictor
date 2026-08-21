@@ -14,8 +14,11 @@ home, away team away); season points-per-game and games played; rest days and
 matches in the last 21 days; promoted flag (absent from this division the
 previous season — knowable at season start from the fixture list); per-team
 home-advantage strength (mean home points minus mean away points over the
-last 20 of each). Output: epl/data/features.csv (regenerable, gitignored) =
-key/odds columns + ~70 feature columns prefixed h_/a_.
+last 20 of each). Also rolling last-5/10 understat xG for/against when
+epl/data/understat_matches.csv exists (fetch_understat.py) — REJECTED by
+the pre-registered gate, kept computed per locked rule, excluded from the
+model in train_report. Output: epl/data/features.csv (regenerable,
+gitignored) = key/odds columns + ~75 feature columns prefixed h_/a_.
 
 Leak-freedom argument: every feature is a pure function of matches dated
 strictly before the row's kickoff, enforced structurally by emit-then-update.
@@ -142,15 +145,45 @@ def replay(df):
     return pd.DataFrame(rows, index=df.index)
 
 
+def add_xg(out):
+    """Rolling last-5/10 understat xG for/against (REJECTED 2026-08-21 per gate,
+    delta -0.00023 — kept computed per locked rule, excluded in train_report)."""
+    src = demo.DATA / "understat_matches.csv"
+    if not src.exists():
+        print("understat_matches.csv missing (run fetch_understat.py); xG cols skipped")
+        return out
+    xg = pd.read_csv(src, parse_dates=["Date"])
+    out = out.merge(xg, on=["Div", "Date", "HomeTeam", "AwayTeam"], how="left")
+    hist = defaultdict(lambda: deque(maxlen=10))
+    rows = []
+    for m in out.itertuples():
+        feat = {}
+        for p, team in (("h_", m.HomeTeam), ("a_", m.AwayTeam)):
+            past = hist[team]
+            for w in (5, 10):
+                if len(past) >= w:
+                    with np.errstate(invalid="ignore"):
+                        vals = np.nanmean(np.array(list(past)[-w:], float), axis=0)
+                    feat[f"{p}xgf{w}"], feat[f"{p}xga{w}"] = vals
+                else:
+                    feat[f"{p}xgf{w}"] = feat[f"{p}xga{w}"] = np.nan
+        rows.append(feat)
+        if np.isfinite(m.xg_h) and np.isfinite(m.xg_a):
+            hist[m.HomeTeam].append((m.xg_h, m.xg_a))
+            hist[m.AwayTeam].append((m.xg_a, m.xg_h))
+    return pd.concat([out.drop(columns=["xg_h", "xg_a"]),
+                      pd.DataFrame(rows, index=out.index)], axis=1)
+
+
 def main():
     df = demo.load_matches()
     feats = replay(df)
     keep = KEEP + [c for _, cols in demo.ODDS_CHAINS for c in cols]
     keep += [c for c in TOTALS_COLS if c in df.columns]
-    out = pd.concat([df[keep], feats], axis=1)
+    out = add_xg(pd.concat([df[keep], feats], axis=1))
     OUT.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUT, index=False)
-    print(f"{OUT}: {len(out)} rows, {len(feats.columns)} feature cols")
+    print(f"{OUT}: {len(out)} rows, {len(out.columns) - len(keep)} feature cols")
 
     for i in SPOT_CHECK_ROWS:                              # leak proof: partial replay == full replay
         partial = replay(df.iloc[: i + 1]).iloc[-1].to_numpy(float)

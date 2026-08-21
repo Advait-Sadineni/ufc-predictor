@@ -127,3 +127,4 @@ Gate (pre-registered before each run): expanding-window OOF CV RPS improvement >
 - 2026-08-21 C hyperparameter sweep, 4 configs — all REJECT (best C3 leaves15/mc100 0.20327, +0.00048 < gate; C1 leaves63 -0.00672, C2 lr.02 -0.00128, C4 colsample.6 -0.00017)
 - 2026-08-21 E near-miss combination B+C3 (pre-registered one-shot) — REJECT (0.20340, +0.00036 < gate; no better than B alone)
 - 2026-08-21 F per-class isotonic calibration of the stack, evaluated on blend seasons where stack is out-of-sample — REJECT (raw 0.19956 vs calibrated 0.19973, -0.00016; the logistic combiner is already calibrated)
+- 2026-08-21 G understat rolling xG for/against last-5/10 (join rate 99.3% via fetch_understat.py) — REJECT (0.20399, -0.00023 < gate; the shots/SoT rolling rates already carry the signal). Columns stay computed in features.csv, excluded from the model.
