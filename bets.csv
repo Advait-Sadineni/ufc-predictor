@@ -9,4 +9,4 @@ id,date,event,pick,odds,stake,result,close,tag
 8,2026-08-14,UFC 330 2026-08-15,BOOSTED 5-leg: Makhachev 2+TD -280 + Makhachev by DEC +135 + Fernandes ML -104 + Johnson/McConico o2.5 +128 + Luque ML +100 (30% boost),2914.0,25.0,L,,model
 9,2026-08-15,UFC 330 2026-08-15,HUNCH 3-leg: Makhachev ML + Makhachev 2+ takedowns + Makhachev 1+ knockdown,903.0,25.0,W,,hunch
 10,2026-08-21,UFC FN Hernandez vs Rodrigues 2026-08-22,MAIN 3-leg: Hernandez ML -188 + Judice/Chaves o2.5 -148 + Nzechukwu ML +118,460.0,100.0,,,model
-11,2026-08-21,UFC FN Hernandez vs Rodrigues 2026-08-22,SIDE straight: Dyer/Reed over 2.5 rounds +116 (model 62% vs 46% implied),116.0,25.0,,,model
+11,2026-08-21,UFC FN Hernandez vs Rodrigues 2026-08-22,SIDE 3-leg: Dyer/Reed o2.5 +116 + Young ML -160 + Padilla ML -105,585.0,25.0,,,model
