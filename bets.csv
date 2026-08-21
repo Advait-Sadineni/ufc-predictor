@@ -8,3 +8,4 @@ id,date,event,pick,odds,stake,result,close,tag
 7,2026-08-12,UFC 330 2026-08-15,BONUS $50 FREE BET 4-leg: D.Johnson ML -265 + Fernandes ML +138 + Luque ML +100 + Makhachev by DEC +135 (profit-only ~$720),1440.0,0.0,L,,model
 8,2026-08-14,UFC 330 2026-08-15,BOOSTED 5-leg: Makhachev 2+TD -280 + Makhachev by DEC +135 + Fernandes ML -104 + Johnson/McConico o2.5 +128 + Luque ML +100 (30% boost),2914.0,25.0,L,,model
 9,2026-08-15,UFC 330 2026-08-15,HUNCH 3-leg: Makhachev ML + Makhachev 2+ takedowns + Makhachev 1+ knockdown,903.0,25.0,W,,hunch
+10,2026-08-21,UFC FN Hernandez vs Rodrigues 2026-08-22,MAIN 3-leg: Hernandez ML -188 + Judice/Chaves o2.5 -148 + Nzechukwu ML +118,460.0,100.0,,,model
