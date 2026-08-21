@@ -122,7 +122,7 @@ model does not beat closing odds, and it will tell you so itself.
 ## EPL (multi-sport expansion)
 
 The repo also hosts a self-contained football (soccer) match-prediction pipeline under `epl/` —
-the UFC pipeline above is unaffected. The demo downloads 15 seasons of top-5-league results
+the UFC pipeline above is unaffected. The demo downloads 26 seasons of top-5-league results
 (EPL, La Liga, Serie A, Bundesliga, Ligue 1) from football-data.co.uk, trains a 3-way
 home/draw/away classifier on pre-match form, and prints RPS, log loss, and per-class calibration
 side by side with the no-vig closing odds (the honest benchmark — matching its calibration is

@@ -1,6 +1,6 @@
 """EPL demo: 3-way match-outcome model vs no-vig closing odds, top-5 leagues.
 
-Downloads 15 seasons (2011-12 .. 2025-26) of results for E0/SP1/I1/D1/F1 from
+Downloads 26 seasons (2000-01 .. 2025-26) of results for E0/SP1/I1/D1/F1 from
 football-data.co.uk into epl/data/ (cached forever: a season file already on
 disk is never re-fetched), replays all matches chronologically to build basic
 pre-match form features (points-per-game and goals for/against over each
@@ -15,8 +15,9 @@ Demo tier, not the real pipeline: form-only features (no Elo, no venue
 splits, no rest days), a single temporal split (no CV), and no stacking or
 calibration layer. Expect the model NOT to beat the market — closing 1X2
 prices are the honest benchmark and matching their calibration is the bar.
-All 15 seasons are complete; the in-progress 2026-27 season is deliberately
-excluded so both test seasons are full ones.
+All 26 seasons are complete; the in-progress 2026-27 season is deliberately
+excluded so both test seasons are full ones. Odds and match-stat columns
+are sparse before ~2005 — extra seasons serve as training rows only.
 
 Run: python epl/demo.py
 """
@@ -33,7 +34,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 BASE_URL = "https://www.football-data.co.uk/mmz4281"
 DIVISIONS = ["E0", "SP1", "I1", "D1", "F1"]        # EPL, La Liga, Serie A, Bundesliga, Ligue 1
-SEASONS = [f"{y:02d}{y + 1:02d}" for y in range(11, 26)]   # 1112 .. 2526
+SEASONS = [f"{y:02d}{y + 1:02d}" for y in range(0, 26)]    # 0001 .. 2526 (deep history ADOPTED +0.00241)
 TEST_START = pd.Timestamp("2024-07-01")            # holdout = 2024-25 + 2025-26 seasons
 SEED = 42
 ODDS_CHAINS = [                                    # preference order, first complete triple wins
@@ -48,7 +49,7 @@ def download_season(season, div):
     """Fetch one season CSV to epl/data/<season>_<div>.csv; skip if cached."""
     DATA.mkdir(parents=True, exist_ok=True)
     out = DATA / f"{season}_{div}.csv"
-    if out.exists():
+    if out.exists() and out.stat().st_size > 1024:  # re-fetch truncated/empty caches
         return out
     url = f"{BASE_URL}/{season}/{div}.csv"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
