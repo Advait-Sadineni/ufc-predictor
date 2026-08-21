@@ -111,6 +111,59 @@ def main():
     base = lgb_cv_rps(df, base_cols, tr.LGB_PARAMS)
     print(f"baseline LGB CV RPS: {base:.5f}")
 
+    if "J" in sys.argv[1:]:
+        import build_features as bf
+        raw = demo.load_matches()
+        keep = ["Div", "season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"]
+
+        def run_combo(k, ha, ex):
+            bf.ELO_K, bf.ELO_HA, bf.MARGIN_EXP = float(k), float(ha), ex
+            d = pd.concat([raw[keep].copy(), bf.replay(raw)], axis=1)
+            d["y"] = d["FTR"].map({"H": 0, "D": 1, "A": 2})
+            return lgb_cv_rps(d, tr.model_feat_cols(d), tr.LGB_PARAMS)
+
+        results = {}
+        for k in (12, 20, 28):
+            for ha in (40, 60, 80):
+                results[(k, ha, 0.5)] = r = run_combo(k, ha, 0.5)
+                print(f"J K={k} HA={ha} exp=0.5: {r:.5f} (delta {base - r:+.5f})")
+        bk, bha, _ = min(results, key=results.get)
+        results[(bk, bha, 0.8)] = r = run_combo(bk, bha, 0.8)
+        print(f"J K={bk} HA={bha} exp=0.8: {r:.5f} (delta {base - r:+.5f})")
+        best = min(results, key=results.get)
+        print(f"J best {best}: {results[best]:.5f} -> "
+              f"{'ADOPT' if base - results[best] >= GATE else 'REJECT'}")
+        return
+
+    if "K" in sys.argv[1:]:
+        from lightgbm import LGBMClassifier
+        y = df["y"].to_numpy()
+        probs = np.full((len(df), 3), np.nan)
+        for s in tr.CV_SEASONS:
+            train, val = df[df["season"] < s], df[df["season"] == s]
+            acc = np.zeros((len(val), 3))
+            for seed in range(42, 47):
+                m = LGBMClassifier(**{**tr.LGB_PARAMS, "random_state": seed})
+                m.fit(train[base_cols], train["y"])
+                acc += m.predict_proba(val[base_cols])
+            probs[val.index] = acc / 5
+        cvm = df["season"].isin(tr.CV_SEASONS).to_numpy()
+        r = demo.rps(y[cvm], probs[cvm])
+        print(f"K 5-seed bag: {r:.5f} (delta {base - r:+.5f}) -> "
+              f"{'ADOPT' if base - r >= GATE else 'REJECT'}")
+        return
+
+    if "L" in sys.argv[1:]:
+        df_l = df.copy()
+        df_l["x_draw_elo"] = df_l["elo_diff"].abs()
+        df_l["x_draw_form"] = (df_l["h_pts5"] - df_l["a_pts5"]).abs()
+        df_l["x_draw_def"] = df_l["h_ga5"] + df_l["a_ga5"]
+        extra = ["x_draw_elo", "x_draw_form", "x_draw_def"]
+        r = lgb_cv_rps(df_l, base_cols + extra, tr.LGB_PARAMS)
+        print(f"L draw-geometry: {r:.5f} (delta {base - r:+.5f}) -> "
+              f"{'ADOPT' if base - r >= GATE else 'REJECT'}")
+        return
+
     if "I" in sys.argv[1:]:
         import build_features as bf
         demo.SEASONS = [f"{yy:02d}{yy + 1:02d}" for yy in range(0, 26)]  # 0001..2526

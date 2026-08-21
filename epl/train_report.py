@@ -100,6 +100,16 @@ EXPERIMENTS = [                            # adopt-or-REJECT ledger (epl/experim
     "eval seasons unchanged) — ADOPTED (LGB CV RPS 0.20135 vs 0.20376, "
     "+0.00241, 5x the gate). Doubling the training data was the largest "
     "single improvement in the project.",
+    "2026-08-21 J Elo grid K{12,20,28} x HA{40,60,80} x margin exp "
+    "{0.5,0.8} — REJECT (best K=12/HA=40/exp=0.8 CV 0.20115 vs baseline "
+    "0.20136, +0.00021 < gate; current K=20/HA=60/0.5 reproduced baseline "
+    "to 1e-5). LGB largely absorbs Elo miscalibration downstream.",
+    "2026-08-21 K 5-seed LGB bag (seeds 42..46) — REJECT (CV 0.20096 vs "
+    "0.20136, +0.00040 < gate; the UFC adoption precedent did not repeat "
+    "at this gate).",
+    "2026-08-21 L draw-geometry features |elo_diff|, |h_pts5-a_pts5|, "
+    "h_ga5+a_ga5 — REJECT (CV 0.20164 vs 0.20136, -0.00028; the trees "
+    "already form these interactions).",
 ]
 
 
