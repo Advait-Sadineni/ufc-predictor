@@ -135,7 +135,7 @@ def replay(df):
         aw["apts"].append(a_pts)
         expected = 1.0 / (1.0 + 10 ** (-(hs["elo"] + ELO_HA - aw["elo"]) / 400.0))
         score = {"H": 1.0, "D": 0.5, "A": 0.0}[m.FTR]
-        delta = ELO_K * np.sqrt(max(abs(hg - ag), 1)) * (score - expected)
+        delta = ELO_K * max(abs(hg - ag), 1) ** MARGIN_EXP * (score - expected)
         hs["elo"] += delta
         aw["elo"] -= delta
         for st, pts in ((hs, h_pts), (aw, a_pts)):
