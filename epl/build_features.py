@@ -44,6 +44,7 @@ import demo  # noqa: E402
 
 OUT = demo.DATA / "features.csv"
 ELO_INIT, ELO_HA, ELO_K = 1500.0, 60.0, 20.0
+MARGIN_EXP = 0.5                           # Elo K multiplier = margin ** MARGIN_EXP
 STATS = ["pts", "gf", "ga", "sf", "sa", "stf", "sta", "cf", "ca", "kf", "ka"]
 TOTALS_COLS = ["PC>2.5", "PC<2.5", "B365C>2.5", "B365C<2.5",
                "P>2.5", "P<2.5", "B365>2.5", "B365<2.5"]

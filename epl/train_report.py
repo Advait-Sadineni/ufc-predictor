@@ -89,7 +89,23 @@ EXPERIMENTS = [                            # adopt-or-REJECT ledger (epl/experim
     "0.2028, stack 0.2019 -> 0.2010 (market 0.1956); O/U 2.5 Brier 0.2445 "
     "-> 0.2440, BTTS 0.2488 -> 0.2478. Freshness fixed DC's 1X2; the "
     "remaining goals-market gap is model quality, not staleness.",
+    "2026-08-21 H LGB-Poisson goals family as third stack member — ADOPTED "
+    "(stack-of-3 0.19856 vs stack-of-2 0.19917 on blend seasons, +0.00060 "
+    ">= gate; family alone CV RPS 0.20074 beats DC 0.20177 and LGB "
+    "0.20376). Its OU2.5/BTTS Brier is slightly worse than DC's (0.24509 "
+    "vs 0.24468 / 0.24903 vs 0.24816), so per the pre-declaration DC "
+    "remains the goals-market source.",
 ]
+
+
+REJECTED_XG = {f"{p}xg{d}{w}" for p in ("h_", "a_") for d in ("f", "a")
+               for w in (5, 10)}          # REJECTED 2026-08-21 (-0.00023 < gate), kept in CSV
+
+
+def model_feat_cols(df):
+    """The model's feature list: h_/a_ replay columns minus rejected ones."""
+    return ["elo_diff"] + [c for c in df.columns
+                           if c.startswith(("h_", "a_")) and c not in REJECTED_XG]
 
 
 def load():
@@ -108,9 +124,44 @@ def season_cutoff(season):
     return pd.Timestamp(2000 + int(season[:2]), 7, 1)
 
 
+def fit_rho(hg, ag, lam, mu, w=None):
+    """Weighted MLE for the DC low-score correlation rho, rates held fixed."""
+    from scipy.optimize import minimize_scalar
+    if w is None:
+        w = np.ones(len(hg))
+
+    def neg(r):
+        tau = np.ones(len(hg))
+        tau = np.where((hg == 0) & (ag == 0), 1 - lam * mu * r, tau)
+        tau = np.where((hg == 0) & (ag == 1), 1 + lam * r, tau)
+        tau = np.where((hg == 1) & (ag == 0), 1 + mu * r, tau)
+        tau = np.where((hg == 1) & (ag == 1), 1 - r, tau)
+        return -np.sum(w * np.log(np.clip(tau, 1e-9, None)))
+
+    return minimize_scalar(neg, bounds=(-0.15, 0.15), method="bounded").x
+
+
+def score_grid_probs(lam, mu, rho):
+    """(1X2 probs, P(over 2.5), P(BTTS)) from the DC-adjusted score grid."""
+    from scipy.stats import poisson
+    k = np.arange(GOAL_GRID)
+    grid = poisson.pmf(k[None, :], lam[:, None])[:, :, None] * \
+        poisson.pmf(k[None, :], mu[:, None])[:, None, :]
+    grid[:, 0, 0] *= np.clip(1 - lam * mu * rho, 1e-9, None)
+    grid[:, 0, 1] *= np.clip(1 + lam * rho, 1e-9, None)
+    grid[:, 1, 0] *= np.clip(1 + mu * rho, 1e-9, None)
+    grid[:, 1, 1] *= np.clip(1 - rho, 1e-9, None)
+    grid /= grid.sum(axis=(1, 2), keepdims=True)
+    x, yg = k[:, None], k[None, :]
+    p1x2 = np.stack([(grid * (x > yg)).sum((1, 2)),
+                     (grid * (x == yg)).sum((1, 2)),
+                     (grid * (x < yg)).sum((1, 2))], axis=1)
+    return p1x2, (grid * ((x + yg) >= 3)).sum((1, 2)), \
+        (grid * ((x >= 1) & (yg >= 1))).sum((1, 2))
+
+
 def fit_dc_league(rows, cutoff, half_life):
     """Fit one league's DC params on rows before cutoff; return predict closure."""
-    from scipy.optimize import minimize_scalar
     from sklearn.linear_model import PoissonRegressor
     w = 0.5 ** ((cutoff - rows["Date"]).dt.days / half_life)
     teams = sorted(set(rows["HomeTeam"]) | set(rows["AwayTeam"]))
@@ -137,44 +188,15 @@ def fit_dc_league(rows, cutoff, half_life):
 
     lam = np.exp(c + att[hi] - deff[ai] + home)
     mu = np.exp(c + att[ai] - deff[hi])
-    hg, ag = rows["FTHG"].to_numpy(), rows["FTAG"].to_numpy()
-
-    def neg_ll(rho):
-        tau = np.ones(n)
-        tau = np.where((hg == 0) & (ag == 0), 1 - lam * mu * rho, tau)
-        tau = np.where((hg == 0) & (ag == 1), 1 + lam * rho, tau)
-        tau = np.where((hg == 1) & (ag == 0), 1 + mu * rho, tau)
-        tau = np.where((hg == 1) & (ag == 1), 1 - rho, tau)
-        return -np.sum(w * np.log(np.clip(tau, 1e-9, None)))
-
-    rho = minimize_scalar(neg_ll, bounds=(-0.15, 0.15), method="bounded").x
+    rho = fit_rho(rows["FTHG"].to_numpy(), rows["FTAG"].to_numpy(), lam, mu, w)
 
     def predict(home_teams, away_teams):
         """(n,3) 1X2 + (n,) OU2.5 over-prob + (n,) BTTS-prob from the score grid."""
-        from scipy.stats import poisson
         a_h = np.array([att[ti[t]] if t in ti else fill_att for t in home_teams])
         d_h = np.array([deff[ti[t]] if t in ti else fill_def for t in home_teams])
         a_a = np.array([att[ti[t]] if t in ti else fill_att for t in away_teams])
         d_a = np.array([deff[ti[t]] if t in ti else fill_def for t in away_teams])
-        lam_ = np.exp(c + a_h - d_a + home)
-        mu_ = np.exp(c + a_a - d_h)
-        k = np.arange(GOAL_GRID)
-        px = poisson.pmf(k[None, :], lam_[:, None])
-        py = poisson.pmf(k[None, :], mu_[:, None])
-        grid = px[:, :, None] * py[:, None, :]
-        grid[:, 0, 0] *= np.clip(1 - lam_ * mu_ * rho, 1e-9, None)
-        grid[:, 0, 1] *= np.clip(1 + lam_ * rho, 1e-9, None)
-        grid[:, 1, 0] *= np.clip(1 + mu_ * rho, 1e-9, None)
-        grid[:, 1, 1] *= np.clip(1 - rho, 1e-9, None)
-        grid /= grid.sum(axis=(1, 2), keepdims=True)
-        x = np.arange(GOAL_GRID)[:, None]
-        yg = np.arange(GOAL_GRID)[None, :]
-        p1x2 = np.stack([(grid * (x > yg)).sum((1, 2)),
-                         (grid * (x == yg)).sum((1, 2)),
-                         (grid * (x < yg)).sum((1, 2))], axis=1)
-        ou25 = (grid * ((x + yg) >= 3)).sum((1, 2))
-        btts = (grid * ((x >= 1) & (yg >= 1))).sum((1, 2))
-        return p1x2, ou25, btts
+        return score_grid_probs(np.exp(c + a_h - d_a + home), np.exp(c + a_a - d_h), rho)
 
     return predict
 
@@ -216,6 +238,34 @@ def lgb_oof(df, feat_cols):
         model = LGBMClassifier(**LGB_PARAMS)
         model.fit(tr[feat_cols], tr["y"])
         probs[ho.index] = model.predict_proba(ho[feat_cols])
+    return probs
+
+
+def poisson_family(df, feat_cols):
+    """Walk-forward LGB-Poisson goals family: 1X2 probs aligned to df.
+
+    ADOPTED 2026-08-21 (stack-of-3 vs stack-of-2 delta +0.00060 >= gate).
+    Two Poisson regressors on the replay features predict home/away goal
+    rates; rho per fold is fit in-sample on train-row rates (one parameter —
+    named simplification); score_grid_probs converts to 1X2. Retrained at
+    every season boundary, CV and holdout alike (protocol v2).
+    """
+    from lightgbm import LGBMRegressor
+    params = {k: v for k, v in LGB_PARAMS.items() if k not in ("objective", "num_class")}
+    probs = np.full((len(df), 3), np.nan)
+    for s in CV_SEASONS + HOLDOUT_SEASONS:
+        train = df[df["Date"] < season_cutoff(s)]
+        val = df[df["season"] == s]
+        mh = LGBMRegressor(objective="poisson", **params)
+        ma = LGBMRegressor(objective="poisson", **params)
+        mh.fit(train[feat_cols], train["FTHG"])
+        ma.fit(train[feat_cols], train["FTAG"])
+        lam = np.clip(mh.predict(val[feat_cols]), 0.05, 6.0)
+        mu = np.clip(ma.predict(val[feat_cols]), 0.05, 6.0)
+        lt = np.clip(mh.predict(train[feat_cols]), 0.05, 6.0)
+        at = np.clip(ma.predict(train[feat_cols]), 0.05, 6.0)
+        rho = fit_rho(train["FTHG"].to_numpy(), train["FTAG"].to_numpy(), lt, at)
+        probs[val.index], _, _ = score_grid_probs(lam, mu, rho)
     return probs
 
 
@@ -263,10 +313,7 @@ def ou_market(df):
 def main():
     df = load()
     y = df["y"].to_numpy()
-    rejected = {f"{p}xg{d}{w}" for p in ("h_", "a_") for d in ("f", "a")
-                for w in (5, 10)}          # REJECTED 2026-08-21 (-0.00023 < gate), kept in CSV
-    feat_cols = ["elo_diff"] + [c for c in df.columns
-                                if c.startswith(("h_", "a_")) and c not in rejected]
+    feat_cols = model_feat_cols(df)
     mkt, mkt_src = demo.market_probs(df)
     cv_mask = df["season"].isin(CV_SEASONS).to_numpy()
     ho_mask = df["season"].isin(HOLDOUT_SEASONS).to_numpy()
@@ -286,18 +333,21 @@ def main():
 
     print("LightGBM expanding-window OOF + holdout...")
     lgb = lgb_oof(df, feat_cols)
+    print("LGB-Poisson goals family...")
+    pois = poisson_family(df, feat_cols)
 
     stack_m = df["season"].isin(STACK_SEASONS).to_numpy()
-    _, stack_all = logit_combine([dc[stack_m], lgb[stack_m]], y[stack_m],
-                                 [dc, lgb])
+    _, stack_all = logit_combine([dc[stack_m], lgb[stack_m], pois[stack_m]],
+                                 y[stack_m], [dc, lgb, pois])
     blend_m = df["season"].isin(BLEND_SEASONS).to_numpy() & np.isfinite(mkt).all(1)
     _, blend_all = logit_combine([stack_all[blend_m], mkt[blend_m]], y[blend_m],
                                  [stack_all, np.nan_to_num(mkt, nan=1 / 3)])
 
     ev = ho_mask & np.isfinite(mkt).all(1)
     yt = y[ev]
-    models = {"Dixon-Coles": dc[ev], "LightGBM": lgb[ev], "Stack": stack_all[ev],
-              "Market (no-vig close)": mkt[ev], "Blend (stack+market)": blend_all[ev]}
+    models = {"Dixon-Coles": dc[ev], "LightGBM": lgb[ev], "LGB-Poisson": pois[ev],
+              "Stack": stack_all[ev], "Market (no-vig close)": mkt[ev],
+              "Blend (stack+market)": blend_all[ev]}
     for name, p in models.items():
         assert np.allclose(p.sum(1), 1.0, atol=1e-6), f"{name} probs do not sum to 1"
 
@@ -305,9 +355,9 @@ def main():
     # be worse than the better single family
     bl_ev = blend_m
     cv_rps = {n: demo.rps(y[bl_ev], p[bl_ev]) for n, p in
-              [("dc", dc), ("lgb", lgb), ("stack", stack_all)]}
-    print(f"CV (2223+2324) RPS: {cv_rps}")
-    assert cv_rps["stack"] <= min(cv_rps["dc"], cv_rps["lgb"]) + 0.002, \
+              [("dc", dc), ("lgb", lgb), ("pois", pois), ("stack", stack_all)]}
+    print(f"CV (2223+2324) RPS: { {k: round(v, 5) for k, v in cv_rps.items()} }")
+    assert cv_rps["stack"] <= min(cv_rps["dc"], cv_rps["lgb"], cv_rps["pois"]) + 0.002, \
         f"stack {cv_rps['stack']:.4f} worse than best single family"
 
     rng = np.random.default_rng(SEED)

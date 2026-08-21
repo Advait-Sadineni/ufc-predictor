@@ -106,10 +106,101 @@ def main():
     only_e = "E" in sys.argv[1:]                   # rerun path: skip A/C/D, they are settled
     print(f"gate (pre-registered): CV RPS improvement >= {GATE}")
     df = tr.load()
-    base_cols = ["elo_diff"] + [c for c in df.columns if c.startswith(("h_", "a_"))]
+    base_cols = tr.model_feat_cols(df)     # excludes rejected xG columns
 
     base = lgb_cv_rps(df, base_cols, tr.LGB_PARAMS)
     print(f"baseline LGB CV RPS: {base:.5f}")
+
+    if "I" in sys.argv[1:]:
+        import build_features as bf
+        demo.SEASONS = [f"{yy:02d}{yy + 1:02d}" for yy in range(0, 26)]  # 0001..2526
+        dfx = demo.load_matches()
+        feats = bf.replay(dfx)
+        dfx = pd.concat([dfx[["Div", "season", "Date", "HomeTeam", "AwayTeam",
+                              "FTHG", "FTAG", "FTR"]].copy(), feats], axis=1)
+        dfx["y"] = dfx["FTR"].map({"H": 0, "D": 1, "A": 2})
+        print(f"extended history: {len(dfx)} matches from {dfx['Date'].min():%Y-%m-%d}")
+        rps_i = lgb_cv_rps(dfx, tr.model_feat_cols(dfx), tr.LGB_PARAMS)
+        print(f"I deep history 0001+: {rps_i:.5f} (delta {base - rps_i:+.5f}) -> "
+              f"{'ADOPT' if base - rps_i >= GATE else 'REJECT'}")
+        return
+
+    if "H" in sys.argv[1:]:
+        from lightgbm import LGBMClassifier, LGBMRegressor
+        from scipy.optimize import minimize_scalar
+        from scipy.stats import poisson
+        y = df["y"].to_numpy()
+        reg_params = {k: v for k, v in tr.LGB_PARAMS.items()
+                      if k not in ("objective", "num_class")}
+        lamv = np.full(len(df), np.nan)
+        muv = np.full(len(df), np.nan)
+        rho_s = {}
+        for s in tr.CV_SEASONS:
+            train, val = df[df["season"] < s], df[df["season"] == s]
+            mh = LGBMRegressor(objective="poisson", **reg_params)
+            ma = LGBMRegressor(objective="poisson", **reg_params)
+            mh.fit(train[base_cols], train["FTHG"])
+            ma.fit(train[base_cols], train["FTAG"])
+            lamv[val.index] = np.clip(mh.predict(val[base_cols]), 0.05, 6.0)
+            muv[val.index] = np.clip(ma.predict(val[base_cols]), 0.05, 6.0)
+            lt = np.clip(mh.predict(train[base_cols]), 0.05, 6.0)
+            at = np.clip(ma.predict(train[base_cols]), 0.05, 6.0)
+            hg, ag = train["FTHG"].to_numpy(), train["FTAG"].to_numpy()
+
+            def neg(r, hg=hg, ag=ag, lt=lt, at=at):
+                tau = np.ones(len(hg))
+                tau = np.where((hg == 0) & (ag == 0), 1 - lt * at * r, tau)
+                tau = np.where((hg == 0) & (ag == 1), 1 + lt * r, tau)
+                tau = np.where((hg == 1) & (ag == 0), 1 + at * r, tau)
+                tau = np.where((hg == 1) & (ag == 1), 1 - r, tau)
+                return -np.sum(np.log(np.clip(tau, 1e-9, None)))
+
+            rho_s[s] = minimize_scalar(neg, bounds=(-0.15, 0.15), method="bounded").x
+        pois = np.full((len(df), 3), np.nan)
+        pois_ou = np.full(len(df), np.nan)
+        pois_bt = np.full(len(df), np.nan)
+        k = np.arange(tr.GOAL_GRID)
+        xg_, yg_ = k[:, None], k[None, :]
+        for s in tr.CV_SEASONS:
+            m = (df["season"] == s).to_numpy()
+            l_, u_, r = lamv[m], muv[m], rho_s[s]
+            grid = poisson.pmf(k[None, :], l_[:, None])[:, :, None] * \
+                poisson.pmf(k[None, :], u_[:, None])[:, None, :]
+            grid[:, 0, 0] *= np.clip(1 - l_ * u_ * r, 1e-9, None)
+            grid[:, 0, 1] *= np.clip(1 + l_ * r, 1e-9, None)
+            grid[:, 1, 0] *= np.clip(1 + u_ * r, 1e-9, None)
+            grid[:, 1, 1] *= np.clip(1 - r, 1e-9, None)
+            grid /= grid.sum(axis=(1, 2), keepdims=True)
+            pois[m] = np.stack([(grid * (xg_ > yg_)).sum((1, 2)),
+                                (grid * (xg_ == yg_)).sum((1, 2)),
+                                (grid * (xg_ < yg_)).sum((1, 2))], 1)
+            pois_ou[m] = (grid * ((xg_ + yg_) >= 3)).sum((1, 2))
+            pois_bt[m] = (grid * ((xg_ >= 1) & (yg_ >= 1))).sum((1, 2))
+
+        dc, dc_ou, dc_bt = tr.dc_predict_seasons(df, tr.CV_SEASONS, 365)
+        lgb = np.full((len(df), 3), np.nan)
+        for s in tr.CV_SEASONS:
+            train, val = df[df["season"] < s], df[df["season"] == s]
+            m = LGBMClassifier(**tr.LGB_PARAMS)
+            m.fit(train[base_cols], train["y"])
+            lgb[val.index] = m.predict_proba(val[base_cols])
+        sm = df["season"].isin(tr.STACK_SEASONS).to_numpy()
+        bm = df["season"].isin(tr.BLEND_SEASONS).to_numpy()
+        _, s2 = tr.logit_combine([dc[sm], lgb[sm]], y[sm], [dc, lgb])
+        _, s3 = tr.logit_combine([dc[sm], lgb[sm], pois[sm]], y[sm], [dc, lgb, pois])
+        r2, r3 = demo.rps(y[bm], s2[bm]), demo.rps(y[bm], s3[bm])
+        cvm = df["season"].isin(tr.CV_SEASONS).to_numpy()
+        print(f"H stack2 {r2:.5f} vs stack3 {r3:.5f} (delta {r2 - r3:+.5f}) -> "
+              f"{'ADOPT' if r2 - r3 >= GATE else 'REJECT'}")
+        print(f"  families alone CV RPS: pois {demo.rps(y[cvm], pois[cvm]):.5f}, "
+              f"dc {demo.rps(y[cvm], dc[cvm]):.5f}, lgb {demo.rps(y[cvm], lgb[cvm]):.5f}")
+        over = ((df["FTHG"] + df["FTAG"]) >= 3).to_numpy(float)
+        bt_true = ((df["FTHG"] >= 1) & (df["FTAG"] >= 1)).to_numpy(float)
+        print(f"  CV OU2.5 Brier: pois {np.mean((pois_ou[cvm] - over[cvm]) ** 2):.5f} "
+              f"vs dc {np.mean((dc_ou[cvm] - over[cvm]) ** 2):.5f}")
+        print(f"  CV BTTS  Brier: pois {np.mean((pois_bt[cvm] - bt_true[cvm]) ** 2):.5f} "
+              f"vs dc {np.mean((dc_bt[cvm] - bt_true[cvm]) ** 2):.5f}")
+        return
 
     if "G" in sys.argv[1:]:
         from collections import defaultdict, deque
