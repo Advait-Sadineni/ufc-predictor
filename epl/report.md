@@ -120,4 +120,10 @@ market:
 
 ## Experiment log
 
-(adopt/REJECT entries with numbers accumulate here)
+Gate (pre-registered before each run): expanding-window OOF CV RPS improvement >= 0.0005 over the six CV seasons. Rejected features stay computed in features.csv, unused.
+
+- 2026-08-21 A league one-hot as LGB features — REJECT (CV RPS 0.20386 vs baseline 0.20376, delta -0.00011 < gate 0.0005)
+- 2026-08-21 B walk-forward DC 1X2 probs as LGB features — REJECT (0.20340, +0.00035 < gate)
+- 2026-08-21 C hyperparameter sweep, 4 configs — all REJECT (best C3 leaves15/mc100 0.20327, +0.00048 < gate; C1 leaves63 -0.00672, C2 lr.02 -0.00128, C4 colsample.6 -0.00017)
+- 2026-08-21 E near-miss combination B+C3 (pre-registered one-shot) — REJECT (0.20340, +0.00036 < gate; no better than B alone)
+- 2026-08-21 F per-class isotonic calibration of the stack, evaluated on blend seasons where stack is out-of-sample — REJECT (raw 0.19956 vs calibrated 0.19973, -0.00016; the logistic combiner is already calibrated)
