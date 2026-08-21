@@ -119,6 +119,19 @@ model does not beat closing odds, and it will tell you so itself.
 - [ ] Resolve duplicate-name fighters via ufcstats fighter URLs
 - [ ] Pre-UFC records for debut fighters (model is weakest on debuts)
 
+## EPL (multi-sport expansion)
+
+The repo also hosts a self-contained football (soccer) match-prediction pipeline under `epl/` —
+the UFC pipeline above is unaffected. The demo downloads 15 seasons of top-5-league results
+(EPL, La Liga, Serie A, Bundesliga, Ligue 1) from football-data.co.uk, trains a 3-way
+home/draw/away classifier on pre-match form, and prints RPS, log loss, and per-class calibration
+side by side with the no-vig closing odds (the honest benchmark — matching its calibration is
+the bar, not beating it). No new dependencies beyond the existing requirements.
+
+```sh
+python epl/demo.py
+```
+
 ## Contact
 
 Advait Sadineni — sadineni.advait@gmail.com
