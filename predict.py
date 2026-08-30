@@ -394,6 +394,11 @@ def main():
                       **{f"kd_{s}_o5": p_over("kd", s, 0.5, i)
                          for s in ("a", "b")},
                       "p_dist_model": round(float(pdm), 4),
+                      # Phase 14 (live audit, 50 fights): debut fights — market Brier .167
+                      # vs model .236 — are abstained; distance model (.260 vs market .232)
+                      # is replaced at serve by the market's totals line when posted.
+                      "abstain": int(min(nf1, nf2) < 2),
+                      "p_dist_mkt": round(0.5 * float(pdm) + 0.5 * 0.46, 4),
                       "p_u25": (round(float(pu), 4)
                                 if frow.get("sched_rounds", 3) == 3 and not np.isnan(pu)
                                 else np.nan),
@@ -425,7 +430,15 @@ def main():
                     saved[-1]["best_over"], saved[-1]["best_over_book"] = t["best_over"]
                 if "best_under" in t:
                     saved[-1]["best_under"], saved[-1]["best_under_book"] = t["best_under"]
-            if not np.isnan(o1):
+                if "best_over" in t and "best_under" in t:
+                    bo, bu = t["best_over"][0], t["best_under"][0]
+                    io = (-bo / (-bo + 100)) if bo < 0 else (100 / (bo + 100))
+                    iu = (-bu / (-bu + 100)) if bu < 0 else (100 / (bu + 100))
+                    saved[-1]["p_dist_mkt"] = round(io / (io + iu), 4)  # over-X.5 ~ distance
+            if not np.isnan(o1) and saved[-1]["abstain"]:
+                print(f"    FanDuel: {n1} {o1:+.0f} / {n2} {o2:+.0f}   [ABSTAIN — debut fight: "
+                      f"market beats the model here (live Brier .167 vs .236)]")
+            elif not np.isnan(o1):
                 ev1, ev2 = ev_per_dollar(p, o1), ev_per_dollar(1 - p, o2)
                 side_n, side_ev, side_o = (n1, ev1, o1) if ev1 >= ev2 else (n2, ev2, o2)
                 side_p = p if ev1 >= ev2 else 1 - p
