@@ -11,20 +11,20 @@ decline, layoffs, weight-class changes), rankings, and physical attributes.
 
 **Split:** train ≤ 2023-06-03 (6650 fights), test after
 (1652 fights). LightGBM (best (15, 0.03, 60), cv 0.6539) and XGBoost
-(best (4, 0.03, 5, 0.8, 0.6, 1), cv 0.6549) tuned with 4-fold expanding-window CV inside
+(best (4, 0.03, 5, 0.8, 0.6, 5), cv 0.6549) tuned with 4-fold expanding-window CV inside
 the train period. The stacking combiner, isotonic calibrator, and market blend
 were all fitted on out-of-fold CV predictions only. The LightGBM component
 is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
-(LGB, XGB, logistic): [0.51, 0.2, 0.14].
+(LGB, XGB, logistic): [0.6, 0.1, 0.15].
 
 ## Model comparison — full test set (1652 fights)
 
 | Predictor | n | Accuracy | Log loss | Brier | ECE |
 |---|---|---|---|---|---|
-| Stacked ensemble (LGB+XGB+logistic) | 1652 | 0.630 | 0.642 | 0.225 | 0.023 |
-| Ensemble + isotonic | 1652 | 0.630 | 0.643 | 0.226 | 0.047 |
+| Stacked ensemble (LGB+XGB+logistic) | 1652 | 0.632 | 0.642 | 0.225 | 0.026 |
+| Ensemble + isotonic | 1652 | 0.630 | 0.644 | 0.226 | 0.036 |
 | LightGBM | 1652 | 0.630 | 0.643 | 0.225 | 0.026 |
-| XGBoost | 1652 | 0.630 | 0.643 | 0.226 | 0.029 |
+| XGBoost | 1652 | 0.628 | 0.644 | 0.226 | 0.036 |
 | Logistic regression (full features) | 1652 | 0.613 | 0.649 | 0.229 | 0.052 |
 | Elo only (logistic) | 1652 | 0.569 | 0.674 | 0.241 | 0.049 |
 
@@ -34,7 +34,7 @@ is a 5-seed bag (adopted Phase 9: CV logloss 0.6571 -> 0.6535). Stack weights
 |---|---|---|---|---|---|
 | Market (no-vig closing odds) | 1182 | 0.702 | 0.582 | 0.199 | 0.033 |
 | Stacked ensemble | 1182 | 0.646 | 0.631 | 0.220 | 0.035 |
-| Blend: market + model | 1182 | 0.705 | 0.577 | 0.197 | 0.024 | logit blend, model coef=+0.289
+| Blend: market + model | 1182 | 0.705 | 0.577 | 0.197 | 0.022 | logit blend, model coef=+0.288
 
 **Does the model beat the market?** No. The market's log loss (0.582) beats the model's (0.631).
 
@@ -86,16 +86,16 @@ close to calibrated.
 Top 10 by permutation importance (mean log-loss increase over 3 shuffles,
 through the full ensemble):
 
-- `red_corner`: +0.0276
-- `age_diff`: +0.0268
+- `red_corner`: +0.0281
+- `age_diff`: +0.0271
 - `elo_diff`: +0.0027
-- `form_sapm_diff`: +0.0024
-- `td_avg_diff`: +0.0024
-- `n_fights_diff`: +0.0021
+- `td_avg_diff`: +0.0025
+- `form_sapm_diff`: +0.0025
+- `n_fights_diff`: +0.0022
 - `elo_decline_diff`: +0.0021
 - `sapm_diff`: +0.0019
-- `sc_share_diff`: +0.0014
-- `form_was_finished_diff`: +0.0010
+- `sc_share_diff`: +0.0015
+- `form_was_finished_diff`: +0.0011
 
 ## Negative results (tried and rejected)
 
